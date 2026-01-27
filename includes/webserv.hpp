@@ -7,6 +7,7 @@
 #include "socket.hpp"
 #include "utils.hpp"
 #include "logger.hpp"
+#include "exceptions.hpp"
 
 // Add any additional global declarations or includes here if necessary
 #include <iostream>
