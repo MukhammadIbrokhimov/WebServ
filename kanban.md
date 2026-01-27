@@ -27,7 +27,7 @@
 
 ---
 
-### [ in progress ] 0.2: Project Structure & Header Organization
+### [ completed ] 0.2: Project Structure & Header Organization
 **Assignee:** Dev A  
 **Description:**  
 - Create includes/server.hpp with forward declarations
