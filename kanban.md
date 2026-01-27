@@ -12,23 +12,22 @@
 
 ## PHASE 0: Setup & Standards
 
-### [ ] 0.1: Repository Setup & Makefile
+### [ completed ] 0.1: Repository Setup & Makefile
 **Assignee:** Dev A  
 **Description:**  
 - Initialize git with proper .gitignore (*.o, *.a, test_*, bin/)
 - Create Makefile with targets: `all`, `clean`, `fclean`, `re`
 - Compile flags: `-Wall -Wextra -Werror -std=c++98` (no external libraries)
-- Support `VERBOSE=1` flag for compilation debugging
 
 **DoD:**
 - [ ] Makefile compiles all .cpp files in src/ recursively
 - [ ] No undefined references or compilation warnings
-- [ ] `make clean` removes all .o files, `fclean` removes executable
+- [ ] `make clean` removes all .o files, `fclean` removes with executable
 - [ ] Executable named `webserv`
 
 ---
 
-### [ ] 0.2: Project Structure & Header Organization
+### [ in progress ] 0.2: Project Structure & Header Organization
 **Assignee:** Dev A  
 **Description:**  
 - Create includes/server.hpp with forward declarations
@@ -46,16 +45,16 @@
 
 ---
 
-### [ ] 0.3: Basic Logging & Error Handling Utility
+### [ completed ] 0.3: Basic Logging & Error Handling Utility
 **Assignee:** Dev A  
 **Description:**  
 - Create includes/logger.hpp with macros: LOG_INFO, LOG_ERROR, LOG_DEBUG
-- Implement to stderr with timestamps
-- Create a global exception hierarchy: WebServException, ConfigException, IOException
+- Implement to stderr
+- Create a global exception hierarchy: WebServException, ConfigException, IOException -- not done
 
 **DoD:**
-- [ ] Logging system works with fprintf to stderr
-- [ ] Exception classes are constructible and throwable
+- [ ] Logging system works with std::cerr
+- [ ] Exception classes are constructible and throwable -- not done
 - [ ] No external dependencies (std::string only)
 
 ---
