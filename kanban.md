@@ -50,7 +50,7 @@
 **Description:**  
 - Create includes/logger.hpp with macros: LOG_INFO, LOG_ERROR, LOG_DEBUG
 - Implement to stderr
-- Create a global exception hierarchy: WebServException, ConfigException, IOException -- not done
+- Create a global exception hierarchy: WebServException, ConfigException, IOException -- done
 
 **DoD:**
 - [ ] Logging system works with std::cerr
@@ -59,7 +59,7 @@
 
 ---
 
-### [ ] 0.4: README.md Documentation
+### [ completed ] 0.4: README.md Documentation
 **Assignee:** Dev C  
 **Description:**  
 - Document project overview and architecture
