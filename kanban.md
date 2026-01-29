@@ -81,13 +81,13 @@
 
 ## PHASE 1: The Skeleton - Core Loop & Config
 
-### [ ] 1.1: Socket Wrapper Class (Non-Blocking Setup)
+### [ Completed ] 1.1: Socket Wrapper Class (Non-Blocking Setup)
 **Assignee:** Dev A  
 **Description:**  
 - Create Socket class in includes/socket.hpp and src/socket/socket.cpp
 - Implement methods:
-  - `Socket(int domain, int type)` - constructor (AF_INET, SOCK_STREAM)
-  - `bind(int port, const std::string& host = "127.0.0.1")`
+  - `Socket(int domain)` - constructor (AF_INET, SOCK_STREAM)
+  - `bind()`
   - `listen(int backlog = SOMAXCONN)`
   - `accept()` - returns new Socket for client
   - `setNonBlocking()` - use fcntl() with O_NONBLOCK
@@ -107,7 +107,7 @@
 
 ---
 
-### [ ] 1.2: Poll-Based Main Event Loop
+### [ In Progress ] 1.2: Poll-Based Main Event Loop
 **Assignee:** Dev A  
 **Description:**  
 - Create Server class in includes/server.hpp and src/server/server.cpp
