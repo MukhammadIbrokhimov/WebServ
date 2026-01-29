@@ -18,5 +18,5 @@ Logger::Level Logger::getLevel() {
 
 // log message to console
 void Logger::log(const std::string& message) {
-	std::cerr << message << std::endl;
+	std::cerr << message << "\033[0m" << std::endl;
 }
