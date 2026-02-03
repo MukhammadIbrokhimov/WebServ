@@ -1,8 +1,13 @@
 #pragma once
 
+#include "socket.hpp"
 #include <vector>
 #include <poll.h>
+#include <iostream>
+#include <unistd.h>
+#include "string_utils.hpp"
 
+class Socket;
 class Server {
 	private:
 		std::vector<struct pollfd> poll_fds;

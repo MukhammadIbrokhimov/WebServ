@@ -3,7 +3,9 @@
 // constructor
 Server::Server(Socket &_socket) : socket(_socket) {}
 // destructor
-Server::~Server() {}
+Server::~Server() {
+	socket.close();
+}
 
 // main server loop
 void Server::run() {
@@ -15,8 +17,8 @@ void Server::run() {
 	while (true) {
 		int ret = poll(&poll_fds[0], poll_fds.size(), TIME_OUT_MS);
 		if (ret == -1) {
-			LOG_ERROR("Poll error");
-			throw SocketException("Poll error");
+			LOG_ERROR("<class Server> Poll error");
+			throw SocketException("<class Server> Poll error");
 		} 
 		// timeout occurred
 		if (ret == 0) continue;
@@ -24,7 +26,7 @@ void Server::run() {
 		for (size_t i = 0; i < poll_fds.size(); ++i) {
 			if (poll_fds[i].revents & (POLLHUP | POLLERR)) {
 				// handle disconnection or error
-				LOG_INFO("Client disconnected or error on fd: " + std::to_string(poll_fds[i].fd));
+				LOG_DEBUG("<class Server> Client disconnected or error on fd: " + toString(poll_fds[i].fd));
 				::close(poll_fds[i].fd);
 				poll_fds.erase(poll_fds.begin() + i--);
 				continue;
@@ -37,24 +39,37 @@ void Server::run() {
 						// add the new client socket to the poll_fds vector
 						struct pollfd pfd_client = {client_fd, POLLIN | POLLOUT, 0};
 						poll_fds.push_back(pfd_client);
-						LOG_INFO("New client connected, fd: " + std::to_string(client_fd));
+						LOG_DEBUG("<class Server> New client connected, fd: " + toString(client_fd));
 					}
 				} else {
 					// handle client data here
-					LOG_INFO("Data available to read on client fd: " + std::to_string(poll_fds[i].fd));
+					LOG_DEBUG("<class Server> Data available to read on client fd: " + toString(poll_fds[i].fd));
 					handle_client_data_read(poll_fds[i].fd);
 					// For simplicity, we will just close the client connection
 					::close(poll_fds[i].fd);
-					LOG_INFO("Client disconnected, fd: " + std::to_string(poll_fds[i].fd));
-					poll_fds.erase(poll_fds.begin() + i);
-					--i; // adjust index after erasing
+					LOG_DEBUG("<class Server> Client disconnected, fd: " + toString(poll_fds[i].fd));
+					poll_fds.erase(poll_fds.begin() + i--);
 				}
 			}
 			if (poll_fds[i].revents & POLLOUT) {
 				// handle client data write here if needed
-				LOG_INFO("Ready to write on client fd: " + std::to_string(poll_fds[i].fd));
+				LOG_DEBUG("<class Server> Ready to write on client fd: " + toString(poll_fds[i].fd));
 				handle_client_data_write(poll_fds[i].fd);
+				::close(poll_fds[i].fd);
+				poll_fds.erase(poll_fds.begin() + i--);
 			}
 		}
 	}
+}
+
+void Server::handle_client_data_read(int client_fd) {
+	// Placeholder for reading data from client
+	LOG_DEBUG("<class Server> Reading data from client fd: " + toString(client_fd));
+	// Actual implementation would go here
+}
+
+void Server::handle_client_data_write(int client_fd) {
+	// Placeholder for writing data to client
+	LOG_DEBUG("<class Server> Writing data to client fd: " + toString(client_fd));
+	// Actual implementation would go here
 }

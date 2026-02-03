@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <string>
 #include <fcntl.h>
+#include <cerrno>
+#include "string_utils.hpp"
 
 class Socket {
 	private:
