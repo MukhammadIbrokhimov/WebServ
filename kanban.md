@@ -107,7 +107,7 @@
 
 ---
 
-### [ In Progress ] 1.2: Poll-Based Main Event Loop
+### [ Completed ] 1.2: Poll-Based Main Event Loop
 **Assignee:** Dev A  
 **Description:**  
 - Create Server class in includes/server.hpp and src/server/server.cpp
@@ -139,7 +139,7 @@
 
 ---
 
-### [ ] 1.3: Signal Handling (SIGINT, SIGTERM)
+### [ In Progress ] 1.3: Signal Handling (SIGINT, SIGTERM)
 **Assignee:** Dev A  
 **Description:**  
 - Install signal handlers for SIGINT (Ctrl+C) and SIGTERM

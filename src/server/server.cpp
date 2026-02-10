@@ -1,7 +1,9 @@
 #include "../../includes/webserv.hpp"
 
 // constructor
-Server::Server(Socket &_socket) : socket(_socket) {}
+Server::Server(Socket &_socket) : socket(_socket) {
+	LOG_DEBUG("<class Server -> server() : socket received " + toString(socket.getFileDescriptor()));
+}
 // destructor
 Server::~Server() {
 	socket.close();
@@ -10,11 +12,13 @@ Server::~Server() {
 // main server loop
 void Server::run() {
 	// add the listening socket to the poll_fds vector
+	LOG_DEBUG("<class Server -> run() : adding listening socket to poll_fds");
 	struct pollfd pfd_listener = {socket.getFileDescriptor(), POLLIN, 0};
 	poll_fds.push_back(pfd_listener);
 	
 	// start the server loop
 	while (true) {
+		LOG_DEBUG("<class Server -> run() : polling for events");
 		int ret = poll(&poll_fds[0], poll_fds.size(), TIME_OUT_MS);
 		if (ret == -1) {
 			LOG_ERROR("<class Server> Poll error");
@@ -24,9 +28,9 @@ void Server::run() {
 		if (ret == 0) continue;
 		// check for events
 		for (size_t i = 0; i < poll_fds.size(); ++i) {
-			if (poll_fds[i].revents & (POLLHUP | POLLERR)) {
+			if ((poll_fds[i].revents & (POLLHUP | POLLERR)) && poll_fds[i].fd != socket.getFileDescriptor()) {
 				// handle disconnection or error
-				LOG_DEBUG("<class Server> Client disconnected or error on fd: " + toString(poll_fds[i].fd));
+				LOG_DEBUG("<class Server -> run(): Client disconnected or error on fd: " + toString(poll_fds[i].fd));
 				::close(poll_fds[i].fd);
 				poll_fds.erase(poll_fds.begin() + i--);
 				continue;
@@ -34,26 +38,27 @@ void Server::run() {
 			if (poll_fds[i].revents & POLLIN) {
 				// new incoming connection
 				if (poll_fds[i].fd == socket.getFileDescriptor()) {
+					LOG_DEBUG("<class Server -> run() : new incoming connection");
 					int client_fd = socket.acceptClient();
 					if (client_fd != -1) {
 						// add the new client socket to the poll_fds vector
 						struct pollfd pfd_client = {client_fd, POLLIN | POLLOUT, 0};
 						poll_fds.push_back(pfd_client);
-						LOG_DEBUG("<class Server> New client connected, fd: " + toString(client_fd));
+						LOG_DEBUG("<class Server -> run() : New client connected, fd: " + toString(client_fd));
 					}
 				} else {
 					// handle client data here
-					LOG_DEBUG("<class Server> Data available to read on client fd: " + toString(poll_fds[i].fd));
+					LOG_DEBUG("<class Server -> run() : Data available to read on client fd: " + toString(poll_fds[i].fd));
 					handle_client_data_read(poll_fds[i].fd);
 					// For simplicity, we will just close the client connection
 					::close(poll_fds[i].fd);
-					LOG_DEBUG("<class Server> Client disconnected, fd: " + toString(poll_fds[i].fd));
+					LOG_DEBUG("<class Server -> run() : Client disconnected, fd: " + toString(poll_fds[i].fd));
 					poll_fds.erase(poll_fds.begin() + i--);
 				}
 			}
 			if (poll_fds[i].revents & POLLOUT) {
 				// handle client data write here if needed
-				LOG_DEBUG("<class Server> Ready to write on client fd: " + toString(poll_fds[i].fd));
+				LOG_DEBUG("<class Server -> run() : Ready to write on client fd: " + toString(poll_fds[i].fd));
 				handle_client_data_write(poll_fds[i].fd);
 				::close(poll_fds[i].fd);
 				poll_fds.erase(poll_fds.begin() + i--);

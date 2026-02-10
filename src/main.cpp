@@ -10,6 +10,7 @@ int main(int argc, char **argv) {
 		LOG_INFO("Debug mode enabled.");
 	}
 	Socket server_socket(8080);
+	server_socket.startListening();
 	Server web_server(server_socket);
 	web_server.run();
 	return 0;
