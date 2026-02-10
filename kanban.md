@@ -139,7 +139,7 @@
 
 ---
 
-### [ In Progress ] 1.3: Signal Handling (SIGINT, SIGTERM)
+### [ Completed ] 1.3: Signal Handling (SIGINT, SIGTERM)
 **Assignee:** Dev A  
 **Description:**  
 - Install signal handlers for SIGINT (Ctrl+C) and SIGTERM
