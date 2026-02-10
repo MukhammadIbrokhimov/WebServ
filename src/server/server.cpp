@@ -1,7 +1,32 @@
 #include "../../includes/webserv.hpp"
 
+//global signal handler for graceful shutdown
+volatile sig_atomic_t g_shutdown = 0;
+
+void Server::signal_handler(int signum) {
+	(void)signum; // suppress unused parameter warning
+	g_shutdown = 1;
+}
+
+void Server::setup_signal_handlers() {
+	struct sigaction sa;
+	sa.sa_handler = signal_handler;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	
+	if (sigaction(SIGINT, &sa, NULL) == -1) {
+		LOG_ERROR("<class Server -> signal_handler(): Error setting up signal handler for SIGINT");
+		throw SocketException("Error setting up signal handler for SIGINT");
+	}
+	if (sigaction(SIGTERM, &sa, NULL) == -1) {
+		LOG_ERROR("<class Server -> signal_handler(): Error setting up signal handler for SIGTERM");
+		throw SocketException("Error setting up signal handler for SIGTERM");
+	}
+}
+
 // constructor
 Server::Server(Socket &_socket) : socket(_socket) {
+	setup_signal_handlers();
 	LOG_DEBUG("<class Server -> server() : socket received " + toString(socket.getFileDescriptor()));
 }
 // destructor
@@ -17,10 +42,14 @@ void Server::run() {
 	poll_fds.push_back(pfd_listener);
 	
 	// start the server loop
-	while (true) {
+	while (g_shutdown != 1) {
 		LOG_DEBUG("<class Server -> run() : polling for events");
 		int ret = poll(&poll_fds[0], poll_fds.size(), TIME_OUT_MS);
 		if (ret == -1) {
+			if (errno == EINTR) {
+				LOG_DEBUG("<class Server -> run() : EINTR received, checking shutdown flag");
+				continue; // Interrupted by signal, check shutdown flag and continue
+			}
 			LOG_ERROR("<class Server> Poll error");
 			throw SocketException("<class Server> Poll error");
 		} 
@@ -65,6 +94,9 @@ void Server::run() {
 			}
 		}
 	}
+	LOG_INFO("<class Server> Shutdown signal received, cleaning up sockets");
+	this->cleanup_sockets();
+	LOG_INFO("<class Server> Server shutdown complete.");
 }
 
 void Server::handle_client_data_read(int client_fd) {
@@ -77,4 +109,16 @@ void Server::handle_client_data_write(int client_fd) {
 	// Placeholder for writing data to client
 	LOG_DEBUG("<class Server> Writing data to client fd: " + toString(client_fd));
 	// Actual implementation would go here
+}
+
+// Cleanup function to close all client sockets
+void Server::cleanup_sockets() {
+	LOG_DEBUG("<class Server -> cleanup_sockets() : Cleaning up client sockets");
+	for (size_t i = 0; i < poll_fds.size(); ++i) {
+		if (poll_fds[i].fd != socket.getFileDescriptor()) {
+			LOG_DEBUG("<class Server -> cleanup_sockets() : Closing client socket fd: " + toString(poll_fds[i].fd));
+			::close(poll_fds[i].fd);
+		}
+	}
+	poll_fds.clear();
 }
