@@ -12,3 +12,7 @@
 // Add any additional global declarations or includes here if necessary
 #include <iostream>
 #include <stdlib.h>
+#include <string.h>
+
+// add any defines here
+#define TIME_OUT_MS 5000 // 5 seconds timeout for poll
