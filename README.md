@@ -1,5 +1,7 @@
 # WebServ
 
+[![build](https://github.com/MukhammadIbrokhimov/WebServ/actions/workflows/build.yml/badge.svg)](https://github.com/MukhammadIbrokhimov/WebServ/actions/workflows/build.yml)
+
 A lightweight HTTP/1.1 web server implemented in C++98 with non-blocking I/O, supporting multiple server configurations, static file serving, and CGI execution.
 
 ## Overview
