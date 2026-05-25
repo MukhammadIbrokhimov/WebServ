@@ -2,6 +2,7 @@
 
 // Central header file for WebServ project
 #include "config.hpp"
+#include "lexer.hpp"
 #include "server.hpp"
 #include "http.hpp"
 #include "socket.hpp"
