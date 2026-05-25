@@ -54,7 +54,7 @@
 
 **DoD:**
 - [ ] Logging system works with std::cerr
-- [ ] Exception classes are constructible and throwable -- not done
+- [ ] Exception classes are constructible and throwable
 - [ ] No external dependencies (std::string only)
 
 ---
