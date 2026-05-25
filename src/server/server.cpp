@@ -30,8 +30,12 @@ Server::Server(Socket &_socket) : socket(_socket) {
 	LOG_DEBUG("<class Server -> server() : socket received " + toString(socket.getFileDescriptor()));
 }
 // destructor
+// Note: we do NOT close `socket` here — Server only borrows it (reference
+// member). The listening Socket is owned by main() and will close itself
+// when its destructor runs. Closing here as well caused a double ::close()
+// on the same fd, which is unsafe (the kernel may have reused that fd
+// number for an unrelated file by then).
 Server::~Server() {
-	socket.close();
 }
 
 // main server loop
@@ -65,32 +69,40 @@ void Server::run() {
 				continue;
 			}
 			if (poll_fds[i].revents & POLLIN) {
-				// new incoming connection
 				if (poll_fds[i].fd == socket.getFileDescriptor()) {
+					// New incoming connection on the listening socket.
 					LOG_DEBUG("<class Server -> run() : new incoming connection");
 					int client_fd = socket.acceptClient();
 					if (client_fd != -1) {
-						// add the new client socket to the poll_fds vector
-						struct pollfd pfd_client = {client_fd, POLLIN | POLLOUT, 0};
+						// Subscribe to POLLIN only. A fresh TCP socket is
+						// already writable, so registering POLLOUT here
+						// would fire on the very next poll() iteration
+						// with nothing to actually send. POLLOUT is
+						// requested later, in Phase 2.5, only once a
+						// response is queued for this client.
+						struct pollfd pfd_client = {client_fd, POLLIN, 0};
 						poll_fds.push_back(pfd_client);
 						LOG_DEBUG("<class Server -> run() : New client connected, fd: " + toString(client_fd));
 					}
 				} else {
-					// handle client data here
+					// Data available from an existing client.
 					LOG_DEBUG("<class Server -> run() : Data available to read on client fd: " + toString(poll_fds[i].fd));
-					handle_client_data_read(poll_fds[i].fd);
-					// For simplicity, we will just close the client connection
-					::close(poll_fds[i].fd);
-					LOG_DEBUG("<class Server -> run() : Client disconnected, fd: " + toString(poll_fds[i].fd));
-					poll_fds.erase(poll_fds.begin() + i--);
+					if (!handle_client_data_read(poll_fds[i].fd)) {
+						// recv() returned 0 (peer closed) or -1 (error).
+						// Per the subject we cannot inspect errno after
+						// read/write, so any failure here means "drop it".
+						::close(poll_fds[i].fd);
+						poll_fds.erase(poll_fds.begin() + i--);
+						continue; // skip the POLLOUT check below for this slot
+					}
 				}
 			}
 			if (poll_fds[i].revents & POLLOUT) {
-				// handle client data write here if needed
+				// Phase 1 stub: nothing is queued for writing yet, and we
+				// no longer register POLLOUT on accept, so in practice this
+				// branch is dormant until Phase 2 starts queuing responses.
 				LOG_DEBUG("<class Server -> run() : Ready to write on client fd: " + toString(poll_fds[i].fd));
 				handle_client_data_write(poll_fds[i].fd);
-				::close(poll_fds[i].fd);
-				poll_fds.erase(poll_fds.begin() + i--);
 			}
 		}
 	}
@@ -99,16 +111,35 @@ void Server::run() {
 	LOG_INFO("<class Server> Server shutdown complete.");
 }
 
-void Server::handle_client_data_read(int client_fd) {
-	// Placeholder for reading data from client
-	LOG_DEBUG("<class Server> Reading data from client fd: " + toString(client_fd));
-	// Actual implementation would go here
+// Phase 1 minimal read: drain whatever the kernel has and detect when the
+// peer has closed the connection. Phase 2.1 will replace this with a real
+// HTTP request parser that accumulates a per-client read buffer.
+//
+// Return value contract used by run():
+//   true  -> connection still healthy, keep the fd in poll_fds
+//   false -> peer closed (recv == 0) or recv failed; caller must close+erase
+//
+// The 42 webserv subject forbids checking errno after a read/write call, so
+// we cannot distinguish EAGAIN from a real error. We trust poll() to be the
+// authoritative source of readiness and treat any -1 as terminal.
+bool Server::handle_client_data_read(int client_fd) {
+	char buffer[4096];
+	ssize_t n = recv(client_fd, buffer, sizeof(buffer), 0);
+	if (n <= 0) {
+		LOG_INFO("<class Server> Client fd " + toString(client_fd)
+				 + " closed (recv returned " + toString(static_cast<long>(n)) + ")");
+		return false;
+	}
+	LOG_DEBUG("<class Server> Read " + toString(static_cast<long>(n))
+			  + " bytes from fd " + toString(client_fd));
+	// Phase 1: data is intentionally discarded. Parsing arrives in 2.1.
+	return true;
 }
 
 void Server::handle_client_data_write(int client_fd) {
-	// Placeholder for writing data to client
+	// Placeholder for writing data to client. Phase 2.2/2.5 will drain a
+	// per-client write buffer here.
 	LOG_DEBUG("<class Server> Writing data to client fd: " + toString(client_fd));
-	// Actual implementation would go here
 }
 
 // Cleanup function to close all client sockets
