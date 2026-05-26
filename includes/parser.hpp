@@ -56,6 +56,20 @@ class Parser {
 		void parseClientMaxBodySize(ServerConfig& server);
 		void parseErrorPage(ServerConfig& server);
 
+		// Location block: "location <path> { ... }". parseLocation reads
+		// the path, parseLocationBlock walks the inner directives.
+		void parseLocation(ServerConfig& server);
+		void parseLocationBlock(LocationConfig& loc);
+		void parseLocationDirective(LocationConfig& loc);
+
+		void parseAllowedMethods(LocationConfig& loc);
+		void parseIndex(LocationConfig& loc);
+		void parseAutoindex(LocationConfig& loc);
+		void parseReturn(LocationConfig& loc);
+		void parseLocRoot(LocationConfig& loc);     // location-level override
+		void parseUploadStore(LocationConfig& loc);
+		void parseCgi(LocationConfig& loc);
+
 		// Recovery: skip tokens until we land on the next ';' at brace
 		// depth 0 (consumed) or '}' at depth 0 (left in place). Tracks
 		// braces so block-form unknown directives skip cleanly.

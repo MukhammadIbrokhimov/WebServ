@@ -59,6 +59,29 @@ static int dumpConfig(const std::string& path) {
 				std::cerr << "  error_page " << it->first
 						  << " -> " << it->second << std::endl;
 			}
+			for (std::size_t k = 0; k < s.locations.size(); ++k) {
+				const LocationConfig& l = s.locations[k];
+				std::cerr << "  location " << l.path << std::endl;
+				if (!l.allowed_methods.empty()) {
+					std::cerr << "    allowed_methods";
+					for (std::size_t m = 0; m < l.allowed_methods.size(); ++m)
+						std::cerr << " " << l.allowed_methods[m];
+					std::cerr << std::endl;
+				}
+				if (!l.root.empty())         std::cerr << "    root " << l.root << std::endl;
+				if (!l.index.empty())        std::cerr << "    index " << l.index << std::endl;
+				if (l.autoindex)             std::cerr << "    autoindex on" << std::endl;
+				if (l.redirect.enabled)
+					std::cerr << "    return " << l.redirect.code
+							  << " " << l.redirect.target << std::endl;
+				if (!l.upload_store.empty()) std::cerr << "    upload_store " << l.upload_store << std::endl;
+				for (std::map<std::string, std::string>::const_iterator it = l.cgi.begin();
+					 it != l.cgi.end(); ++it)
+				{
+					std::cerr << "    cgi " << it->first
+							  << " -> " << it->second << std::endl;
+				}
+			}
 		}
 		return 0;
 	} catch (const std::exception& e) {

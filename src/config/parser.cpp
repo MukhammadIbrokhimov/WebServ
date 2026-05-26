@@ -130,6 +130,7 @@ void Parser::parseServerDirective(ServerConfig& server) {
 	if (name.text == "root")                 { parseRoot(server);               return; }
 	if (name.text == "client_max_body_size") { parseClientMaxBodySize(server);  return; }
 	if (name.text == "error_page")           { parseErrorPage(server);          return; }
+	if (name.text == "location")             { parseLocation(server);           return; }
 
 	// nginx-style leniency: warn and skip. The subject explicitly invites
 	// extra keys in the config (see IV.3), so an unknown directive isn't
@@ -213,6 +214,145 @@ void Parser::parseErrorPage(ServerConfig& server) {
 		// nginx's behaviour and is the least-surprising rule.
 		server.error_pages[code] = path;
 	}
+}
+
+// =========================================================================
+// Location blocks
+// =========================================================================
+//
+// Grammar:
+//   location_block      ::= "location" WORD "{" location_directive* "}"
+//   location_directive  ::= one of the supported directives, else warn+skip
+//
+// parseLocation is called after the dispatcher has already consumed the
+// "location" keyword. It owns the path WORD, hands off to
+// parseLocationBlock for the body, and pushes the result onto
+// ServerConfig::locations.
+//
+// parseLocationBlock is the structural twin of parseServerBlock — same
+// shape, different inner dispatcher.
+
+void Parser::parseLocation(ServerConfig& server) {
+	const Token& pathTok = expect(TOK_WORD, "as 'location' path");
+	LocationConfig loc;
+	loc.path = pathTok.text;
+	parseLocationBlock(loc);
+	server.locations.push_back(loc);
+}
+
+void Parser::parseLocationBlock(LocationConfig& loc) {
+	expect(TOK_LBRACE, "to open location block");
+	while (true) {
+		const Token& t = lex_.peek();
+		if (t.kind == TOK_RBRACE) { lex_.next(); return; }
+		if (t.kind == TOK_EOF)
+			throw ConfigException(locOf(t)
+				+ "unclosed location block, expected '}'");
+		parseLocationDirective(loc);
+	}
+}
+
+void Parser::parseLocationDirective(LocationConfig& loc) {
+	const Token& name = expect(TOK_WORD, "as directive name");
+
+	if (name.text == "allowed_methods") { parseAllowedMethods(loc); return; }
+	if (name.text == "index")           { parseIndex(loc);          return; }
+	if (name.text == "autoindex")       { parseAutoindex(loc);      return; }
+	if (name.text == "return")          { parseReturn(loc);         return; }
+	if (name.text == "root")            { parseLocRoot(loc);        return; }
+	if (name.text == "upload_store")    { parseUploadStore(loc);    return; }
+	if (name.text == "cgi")             { parseCgi(loc);            return; }
+
+	std::cerr << locOf(name)
+			  << "warning: unknown location directive '" << name.text
+			  << "', ignoring" << std::endl;
+	skipToEndOfDirective();
+}
+
+// ---------- allowed_methods (variable-arity, validated set) ---------------
+// Identical shape to error_page but without the "last is path" rule. The
+// validated set is the three methods the subject mandates (IV.1).
+
+void Parser::parseAllowedMethods(LocationConfig& loc) {
+	while (lex_.peek().kind != TOK_SEMI) {
+		const Token& t = lex_.peek();
+		if (t.kind != TOK_WORD)
+			throw ConfigException(locOf(t)
+				+ "unexpected token in 'allowed_methods', got '" + t.text + "'");
+		const std::string& m = t.text;
+		if (m != "GET" && m != "POST" && m != "DELETE")
+			throw ConfigException(locOf(t)
+				+ "unsupported HTTP method '" + m + "' (allowed: GET, POST, DELETE)");
+		loc.allowed_methods.push_back(m);
+		lex_.next();
+	}
+	if (loc.allowed_methods.empty()) {
+		// Point the error at the ';' — that's where a method should have been.
+		throw ConfigException(locOf(lex_.peek())
+			+ "'allowed_methods' needs at least one method");
+	}
+	expect(TOK_SEMI, "after 'allowed_methods' values");
+}
+
+// ---------- Trivial single-value: index, root override, upload_store -----
+
+void Parser::parseIndex(LocationConfig& loc) {
+	const Token& value = expect(TOK_WORD, "as 'index' argument");
+	expect(TOK_SEMI, "after 'index' value");
+	loc.index = value.text;
+}
+
+void Parser::parseLocRoot(LocationConfig& loc) {
+	const Token& value = expect(TOK_WORD, "as 'root' argument");
+	expect(TOK_SEMI, "after 'root' value");
+	loc.root = value.text;
+}
+
+void Parser::parseUploadStore(LocationConfig& loc) {
+	const Token& value = expect(TOK_WORD, "as 'upload_store' argument");
+	expect(TOK_SEMI, "after 'upload_store' value");
+	loc.upload_store = value.text;
+}
+
+// ---------- Enum-style: autoindex on|off ---------------------------------
+// One WORD constrained to exactly two valid strings. Reject anything else.
+
+void Parser::parseAutoindex(LocationConfig& loc) {
+	const Token& value = expect(TOK_WORD, "as 'autoindex' argument (on|off)");
+	expect(TOK_SEMI, "after 'autoindex' value");
+	if (value.text == "on")       loc.autoindex = true;
+	else if (value.text == "off") loc.autoindex = false;
+	else throw ConfigException(locOf(value)
+		+ "'autoindex' expects 'on' or 'off', got '" + value.text + "'");
+}
+
+// ---------- Structured: return CODE TARGET -------------------------------
+// The subject mandates HTTP redirection per route. We require both a status
+// code and a target — `return 200;` (no body) is not in scope.
+
+void Parser::parseReturn(LocationConfig& loc) {
+	const Token& codeTok   = expect(TOK_WORD, "as 'return' status code");
+	const Token& targetTok = expect(TOK_WORD, "as 'return' target");
+	expect(TOK_SEMI, "after 'return' target");
+
+	loc.redirect.code    = parseStatusCode(codeTok);
+	loc.redirect.target  = targetTok.text;
+	loc.redirect.enabled = true;
+}
+
+// ---------- Map entry: cgi EXTENSION INTERPRETER -------------------------
+// Stored as a map { ".py" -> "/usr/bin/python3", ... }. The extension must
+// start with '.' so the request handler can match by filename suffix.
+
+void Parser::parseCgi(LocationConfig& loc) {
+	const Token& ext    = expect(TOK_WORD, "as 'cgi' extension (e.g. '.py')");
+	const Token& interp = expect(TOK_WORD, "as 'cgi' interpreter path");
+	expect(TOK_SEMI, "after 'cgi' interpreter");
+
+	if (ext.text.empty() || ext.text[0] != '.')
+		throw ConfigException(locOf(ext)
+			+ "'cgi' extension must start with '.': '" + ext.text + "'");
+	loc.cgi[ext.text] = interp.text;
 }
 
 // ---------- Value converters ---------------------------------------------
