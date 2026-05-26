@@ -14,7 +14,6 @@
 // and the server consumes them read-only. Keeping the data model isolated
 // makes each stage independently testable.
 //
-// Subject mapping (webserv.pdf §IV.3):
 //   - interface:port pairs              -> ListenSpec, ServerConfig::listens
 //   - default error pages               -> ServerConfig::error_pages
 //   - max client body size              -> ServerConfig::client_max_body_size
@@ -90,16 +89,6 @@ struct ServerConfig {
 // compiles on its own; the implementation file will appear as we build the
 // lexer, parser, and validator one at a time.
 class Config {
-	public:
-		Config();
-
-		// Reads `path`, runs lexer -> parser -> validator. Throws
-		// ConfigException on any error encountered along the way.
-		void load(const std::string& path);
-
-		// Read-only access for the rest of the server.
-		const std::vector<ServerConfig>& servers() const;
-
 	private:
 		std::vector<ServerConfig> servers_;
 
@@ -111,4 +100,15 @@ class Config {
 		// Non-copyable: a Config is built once at startup and read forever.
 		Config(const Config&);
 		Config& operator=(const Config&);
+
+	public:
+		Config();
+
+		// Reads `path`, runs lexer -> parser -> validator. Throws
+		// ConfigException on any error encountered along the way.
+		void load(const std::string& path);
+
+		// Read-only access for the rest of the server.
+		const std::vector<ServerConfig>& servers() const;
+
 };
