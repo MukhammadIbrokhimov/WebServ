@@ -156,7 +156,7 @@
 
 ---
 
-### [ ] 1.4: Config File Parser (Basic Structure)
+### [ completed ] 1.4: Config File Parser (Basic Structure)
 **Assignee:** Dev B  
 **Description:**  
 - Create Config class in includes/config.hpp and src/config/config.cpp
