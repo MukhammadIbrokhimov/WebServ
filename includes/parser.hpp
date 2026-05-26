@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <set>
 #include "config.hpp"
 #include "lexer.hpp"
 
@@ -28,7 +29,24 @@ class Parser {
 		void parseFile(std::vector<ServerConfig>& out);
 
 	private:
+		// Sub-Parser constructor: used when recursing into an included file.
+		// Shares the cycle guard (so cycles across includes can be detected)
+		// and carries a base directory for resolving further relative paths.
+		Parser(Lexer& lex, std::set<std::string>& shared_cycle_guard,
+			   const std::string& base_dir);
+
 		Lexer& lex_;
+
+		// Cycle detection for the include directive. The top-level Parser
+		// owns the actual set; sub-Parsers borrow it via a pointer so all
+		// parsers in one parse run see the same in-progress set.
+		std::set<std::string>  owned_cycle_guard_;
+		std::set<std::string>* cycle_guard_;
+
+		// Directory that relative include paths are resolved against.
+		// Initialised from the Lexer's origin in the top-level constructor;
+		// updated to the included file's directory in sub-Parsers.
+		std::string base_dir_;
 
 		// ---- Token-stream primitives ----------------------------------
 		// match: consume the next token if it has the requested kind, return
@@ -69,6 +87,11 @@ class Parser {
 		void parseLocRoot(LocationConfig& loc);     // location-level override
 		void parseUploadStore(LocationConfig& loc);
 		void parseCgi(LocationConfig& loc);
+
+		// `include FILE;` inside a server block. Recursively parses the
+		// named file's server-level directives into `server`. Throws on
+		// cycles or unreadable files.
+		void parseInclude(ServerConfig& server);
 
 		// Recovery: skip tokens until we land on the next ';' at brace
 		// depth 0 (consumed) or '}' at depth 0 (left in place). Tracks

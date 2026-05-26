@@ -3,13 +3,65 @@
 #include <sstream>
 #include <iostream>   // std::cerr for unknown-directive warnings
 #include <limits>     // std::numeric_limits for overflow check in parseSize
+#include <fstream>    // std::ifstream for include directive
+
+// ---------- File and path helpers for `include` --------------------------
+// Kept as static functions so they have internal linkage. These exist in
+// config.cpp too in a similar form; once Phase 4 polish lands they can be
+// merged into a shared utility. For now duplication is cheaper than the
+// header churn.
+
+static std::string readIncludedFile(const std::string& path) {
+	std::ifstream in(path.c_str());
+	if (!in)
+		throw ConfigException("cannot open included file '" + path + "'");
+	std::stringstream ss;
+	ss << in.rdbuf();
+	return ss.str();
+}
+
+// Return the directory portion of `path` (everything up to and including the
+// last '/'). Returns "" if there is no slash, meaning "current directory".
+static std::string dirnameOf(const std::string& path) {
+	std::string::size_type slash = path.rfind('/');
+	if (slash == std::string::npos) return "";
+	return path.substr(0, slash + 1);
+}
+
+// Resolve a relative include path against the including file's directory.
+// Absolute paths (leading '/') pass through unchanged.
+static std::string joinPath(const std::string& dir, const std::string& name) {
+	if (!name.empty() && name[0] == '/') return name;
+	return dir + name;
+}
 
 // ---------------------------------------------------------------------------
 // Parser implementation.
 // Read includes/parser.hpp for the architecture and grammar overview.
 // ---------------------------------------------------------------------------
 
-Parser::Parser(Lexer& lex) : lex_(lex) {}
+// Top-level constructor: the cycle guard and base dir are owned here. The
+// origin of the top file is seeded into the set so an include of the top
+// file itself counts as a cycle.
+Parser::Parser(Lexer& lex)
+	: lex_(lex)
+	, owned_cycle_guard_()
+	, cycle_guard_(&owned_cycle_guard_)
+	, base_dir_(dirnameOf(lex.origin()))
+{
+	cycle_guard_->insert(lex.origin());
+}
+
+// Sub-Parser constructor: shares the cycle guard with the parent and
+// receives its own base_dir (the directory of the included file). The
+// owned_cycle_guard_ member is present but unused on this path.
+Parser::Parser(Lexer& lex, std::set<std::string>& shared_cycle_guard,
+			   const std::string& base_dir)
+	: lex_(lex)
+	, owned_cycle_guard_()
+	, cycle_guard_(&shared_cycle_guard)
+	, base_dir_(base_dir)
+{}
 
 // ---------- Token-stream primitives ---------------------------------------
 
@@ -131,6 +183,7 @@ void Parser::parseServerDirective(ServerConfig& server) {
 	if (name.text == "client_max_body_size") { parseClientMaxBodySize(server);  return; }
 	if (name.text == "error_page")           { parseErrorPage(server);          return; }
 	if (name.text == "location")             { parseLocation(server);           return; }
+	if (name.text == "include")              { parseInclude(server);            return; }
 
 	// nginx-style leniency: warn and skip. The subject explicitly invites
 	// extra keys in the config (see IV.3), so an unknown directive isn't
@@ -353,6 +406,51 @@ void Parser::parseCgi(LocationConfig& loc) {
 		throw ConfigException(locOf(ext)
 			+ "'cgi' extension must start with '.': '" + ext.text + "'");
 	loc.cgi[ext.text] = interp.text;
+}
+
+// =========================================================================
+// include
+// =========================================================================
+//
+// `include FILE;` at server scope: read FILE, tokenise it, then parse it
+// directly into the current ServerConfig as if its contents had appeared
+// in place of the include line.
+//
+// Implementation notes:
+//   - Path resolution: relative paths are joined with base_dir_ (the
+//     directory of the file that contains this `include` line), NOT the
+//     CWD of the process. That matches nginx behaviour and makes configs
+//     portable.
+//   - Cycle detection: we maintain a set of files currently being parsed.
+//     If an include resolves to a file already in the set, we throw. The
+//     entry is removed once the include finishes, so a file may be
+//     included multiple times in disjoint subtrees.
+//   - Scope: only server-scope include is supported. File-scope (mixing
+//     `server { ... }` blocks across files) and location-scope can be
+//     added later by introducing analogous sub.parseFile() / sub.parseLocationDirective() loops.
+
+void Parser::parseInclude(ServerConfig& server) {
+	const Token& pathTok = expect(TOK_WORD, "as 'include' argument");
+	expect(TOK_SEMI, "after 'include' value");
+
+	const std::string resolved = joinPath(base_dir_, pathTok.text);
+
+	if (cycle_guard_->count(resolved))
+		throw ConfigException(locOf(pathTok)
+			+ "include cycle: '" + resolved + "' is already being included");
+	cycle_guard_->insert(resolved);
+
+	std::string content = readIncludedFile(resolved);
+	Lexer       subLex(content, resolved);
+	Parser      sub(subLex, *cycle_guard_, dirnameOf(resolved));
+
+	// Drive the sub-Parser through server-level directives until the
+	// included file is exhausted. Same-class private access lets us call
+	// the dispatcher directly.
+	while (subLex.peek().kind != TOK_EOF)
+		sub.parseServerDirective(server);
+
+	cycle_guard_->erase(resolved);
 }
 
 // ---------- Value converters ---------------------------------------------
