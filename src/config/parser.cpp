@@ -2,6 +2,7 @@
 #include "../../includes/parser.hpp"
 #include <sstream>
 #include <iostream>   // std::cerr for unknown-directive warnings
+#include <limits>     // std::numeric_limits for overflow check in parseSize
 
 // ---------------------------------------------------------------------------
 // Parser implementation.
@@ -124,10 +125,11 @@ void Parser::parseServerBlock(ServerConfig& server) {
 void Parser::parseServerDirective(ServerConfig& server) {
 	const Token& name = expect(TOK_WORD, "as directive name");
 
-	if (name.text == "listen") {
-		parseListen(server);
-		return;
-	}
+	if (name.text == "listen")               { parseListen(server);             return; }
+	if (name.text == "server_name")          { parseServerName(server);         return; }
+	if (name.text == "root")                 { parseRoot(server);               return; }
+	if (name.text == "client_max_body_size") { parseClientMaxBodySize(server);  return; }
+	if (name.text == "error_page")           { parseErrorPage(server);          return; }
 
 	// nginx-style leniency: warn and skip. The subject explicitly invites
 	// extra keys in the config (see IV.3), so an unknown directive isn't
@@ -149,32 +151,155 @@ void Parser::parseListen(ServerConfig& server) {
 	server.listens.push_back(spec);
 }
 
+// ---------- Pattern 1: trivial single-value directives -------------------
+// `server_name X;` and `root X;` are identical in shape: one WORD, one SEMI,
+// assign the text. Inlined twice rather than DRYed because two examples
+// don't justify a helper — and the explicitness makes each one easy to find.
+
+void Parser::parseServerName(ServerConfig& server) {
+	const Token& value = expect(TOK_WORD, "as 'server_name' argument");
+	expect(TOK_SEMI, "after 'server_name' value");
+	server.server_name = value.text;
+}
+
+void Parser::parseRoot(ServerConfig& server) {
+	const Token& value = expect(TOK_WORD, "as 'root' argument");
+	expect(TOK_SEMI, "after 'root' value");
+	server.root = value.text;
+}
+
+// ---------- Pattern 2: parsed-value directive ----------------------------
+// `client_max_body_size 10M;` — one WORD, but the WORD's text needs further
+// parsing (digits + optional K/M/G suffix). The parsing logic lives in
+// parseSize so it's reusable.
+
+void Parser::parseClientMaxBodySize(ServerConfig& server) {
+	const Token& value = expect(TOK_WORD, "as 'client_max_body_size' argument");
+	expect(TOK_SEMI, "after 'client_max_body_size' value");
+	server.client_max_body_size = parseSize(value);
+}
+
+// ---------- Pattern 3: variable-arity directive --------------------------
+// `error_page CODE [CODE ...] PATH;`
+//
+// Grammar: at least one status code, then a path, terminated by ';'. The
+// idiom is "read WORDs until SEMI, then post-process the collected list."
+// This is the parser's first taste of "look at the structure of the
+// collected args to decide meaning."
+
+void Parser::parseErrorPage(ServerConfig& server) {
+	std::vector<Token> args;
+	while (lex_.peek().kind != TOK_SEMI) {
+		const Token& t = lex_.peek();
+		if (t.kind != TOK_WORD)
+			throw ConfigException(locOf(t)
+				+ "unexpected token in 'error_page', got '" + t.text + "'");
+		args.push_back(lex_.next());
+	}
+	expect(TOK_SEMI, "after 'error_page' values");
+
+	if (args.size() < 2) {
+		// Either zero args, or only one (no way to tell which is code vs path).
+		const Token& where = args.empty() ? lex_.peek() : args[0];
+		throw ConfigException(locOf(where)
+			+ "'error_page' needs at least one status code and a path");
+	}
+
+	// Last arg is the path; every arg before it is a status code.
+	const std::string& path = args.back().text;
+	for (std::size_t i = 0; i < args.size() - 1; ++i) {
+		int code = parseStatusCode(args[i]);
+		// Last-write wins if the same code appears twice. That matches
+		// nginx's behaviour and is the least-surprising rule.
+		server.error_pages[code] = path;
+	}
+}
+
 // ---------- Value converters ---------------------------------------------
 
-int Parser::parsePort(const Token& tok) {
+long Parser::parseIntInRange(const Token& tok, long lo, long hi,
+							 const char* what)
+{
 	// Reject anything that isn't pure digits before even trying to parse.
-	// stringstream alone would accept leading whitespace ("  80"), which we
-	// don't want here — the lexer already stripped whitespace.
+	// stringstream alone would accept leading whitespace ("  80") or a
+	// trailing junk after a parsed prefix; we want a strict contract.
 	if (tok.text.empty())
-		throw ConfigException(locOf(tok) + "expected port number, got empty");
+		throw ConfigException(locOf(tok)
+			+ "expected " + what + ", got empty");
 
 	for (std::size_t k = 0; k < tok.text.size(); ++k) {
 		char c = tok.text[k];
 		if (c < '0' || c > '9')
 			throw ConfigException(locOf(tok)
-				+ "expected port number, got '" + tok.text + "'");
+				+ "expected " + what + ", got '" + tok.text + "'");
 	}
 
 	long n = 0;
 	std::stringstream ss(tok.text);
 	ss >> n;
-	if (ss.fail() || !ss.eof())   // trailing junk would leave eof false
+	if (ss.fail() || !ss.eof())
 		throw ConfigException(locOf(tok)
-			+ "invalid port number '" + tok.text + "'");
-	if (n < 1 || n > 65535)
+			+ "invalid " + what + ": '" + tok.text + "'");
+	if (n < lo || n > hi) {
+		std::stringstream msg;
+		msg << locOf(tok) << what << " out of range ("
+			<< lo << ".." << hi << "): " << tok.text;
+		throw ConfigException(msg.str());
+	}
+	return n;
+}
+
+int Parser::parsePort(const Token& tok) {
+	return static_cast<int>(parseIntInRange(tok, 1, 65535, "port"));
+}
+
+int Parser::parseStatusCode(const Token& tok) {
+	// HTTP status codes are 3-digit numbers. We accept the full 100..599
+	// range — informational, success, redirect, client error, server error.
+	return static_cast<int>(parseIntInRange(tok, 100, 599, "HTTP status code"));
+}
+
+std::size_t Parser::parseSize(const Token& tok) {
+	// nginx accepts a trailing K/M/G suffix on size values, optionally
+	// uppercase. "10K" -> 10 * 1024, "1M" -> 1 * 1048576, etc.
+	// A bare number with no suffix means bytes.
+	const std::string& s = tok.text;
+	if (s.empty())
+		throw ConfigException(locOf(tok) + "empty size value");
+
+	std::size_t       digits_end = s.size();
+	std::size_t       multiplier = 1;
+
+	char last = s[s.size() - 1];
+	if (last == 'k' || last == 'K') {
+		multiplier = 1024UL;
+		--digits_end;
+	} else if (last == 'm' || last == 'M') {
+		multiplier = 1024UL * 1024UL;
+		--digits_end;
+	} else if (last == 'g' || last == 'G') {
+		multiplier = 1024UL * 1024UL * 1024UL;
+		--digits_end;
+	}
+
+	if (digits_end == 0)
 		throw ConfigException(locOf(tok)
-			+ "port out of range (1..65535): " + tok.text);
-	return static_cast<int>(n);
+			+ "size has no number before suffix: '" + s + "'");
+
+	// Reuse the integer parser on just the digit prefix. We pass a synthetic
+	// token so the error line still points at the original source.
+	Token digitTok(TOK_WORD, s.substr(0, digits_end), tok.line);
+	long n = parseIntInRange(digitTok, 0, std::numeric_limits<long>::max(),
+							 "size");
+
+	// Overflow check: would n * multiplier exceed size_t?
+	std::size_t un = static_cast<std::size_t>(n);
+	if (multiplier > 1
+		&& un > std::numeric_limits<std::size_t>::max() / multiplier)
+	{
+		throw ConfigException(locOf(tok) + "size overflow: '" + s + "'");
+	}
+	return un * multiplier;
 }
 
 void Parser::splitHostPort(const Token& tok,

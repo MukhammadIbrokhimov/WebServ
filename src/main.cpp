@@ -41,10 +41,23 @@ static int dumpConfig(const std::string& path) {
 		const std::vector<ServerConfig>& servers = cfg.servers();
 		std::cerr << "parsed " << servers.size() << " server block(s)" << std::endl;
 		for (std::size_t i = 0; i < servers.size(); ++i) {
+			const ServerConfig& s = servers[i];
 			std::cerr << "server[" << i << "]" << std::endl;
-			for (std::size_t j = 0; j < servers[i].listens.size(); ++j) {
-				std::cerr << "  listen " << servers[i].listens[j].host
-						  << ":" << servers[i].listens[j].port << std::endl;
+			for (std::size_t j = 0; j < s.listens.size(); ++j) {
+				std::cerr << "  listen " << s.listens[j].host
+						  << ":" << s.listens[j].port << std::endl;
+			}
+			if (!s.server_name.empty())
+				std::cerr << "  server_name " << s.server_name << std::endl;
+			if (!s.root.empty())
+				std::cerr << "  root " << s.root << std::endl;
+			std::cerr << "  client_max_body_size " << s.client_max_body_size
+					  << std::endl;
+			for (std::map<int, std::string>::const_iterator it = s.error_pages.begin();
+				 it != s.error_pages.end(); ++it)
+			{
+				std::cerr << "  error_page " << it->first
+						  << " -> " << it->second << std::endl;
 			}
 		}
 		return 0;

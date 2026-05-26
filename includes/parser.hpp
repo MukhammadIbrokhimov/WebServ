@@ -51,20 +51,34 @@ class Parser {
 		void parseServerBlock(ServerConfig& server);
 		void parseServerDirective(ServerConfig& server);
 		void parseListen(ServerConfig& server);
+		void parseServerName(ServerConfig& server);
+		void parseRoot(ServerConfig& server);
+		void parseClientMaxBodySize(ServerConfig& server);
+		void parseErrorPage(ServerConfig& server);
 
-		// Recovery: skip tokens until we land on the next ';' (consumed)
-		// or '}' (left in place). Used after a warning on an unknown
-		// directive so we can keep going instead of aborting.
+		// Recovery: skip tokens until we land on the next ';' at brace
+		// depth 0 (consumed) or '}' at depth 0 (left in place). Tracks
+		// braces so block-form unknown directives skip cleanly.
 		void skipToEndOfDirective();
 
 		// ---- Value converters ----------------------------------------
-		// Parse a WORD token's text as a TCP port (1..65535). Throws on
-		// non-numeric input, trailing junk, or out-of-range values.
+		// Generic helper: parse a WORD token as an integer in [lo, hi].
+		// `what` names the value for error messages ("port", "HTTP
+		// status code", ...). Throws ConfigException on any failure.
+		long parseIntInRange(const Token& tok, long lo, long hi,
+							 const char* what);
+
+		// Convenience wrappers around parseIntInRange.
 		int parsePort(const Token& tok);
+		int parseStatusCode(const Token& tok);
+
+		// Parse a size with optional K/M/G suffix (case-insensitive).
+		// "10000" -> 10000, "10K" -> 10240, "1M" -> 1048576, etc.
+		// Throws on invalid input, missing number, or overflow.
+		std::size_t parseSize(const Token& tok);
 
 		// Split a "listen" argument into (host, port). Accepts "PORT",
-		// "HOST:PORT", and "[IPv6]:PORT" (the IPv6 form is not used yet
-		// but the splitter handles it harmlessly).
+		// "HOST:PORT", and "[IPv6]:PORT".
 		void splitHostPort(const Token& tok,
 						   std::string& host_out, int& port_out);
 
