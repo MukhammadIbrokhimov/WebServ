@@ -103,6 +103,11 @@ class Config {
 	private:
 		std::vector<ServerConfig> servers_;
 
+		// Semantic checks run after parsing. Throws ConfigException with a
+		// human-readable message if any rule is violated. See config.cpp
+		// for the rule list.
+		void validate();
+
 		// Non-copyable: a Config is built once at startup and read forever.
 		Config(const Config&);
 		Config& operator=(const Config&);

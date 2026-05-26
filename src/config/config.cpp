@@ -82,4 +82,59 @@ void Config::load(const std::string& path) {
 	Lexer       lex(source, path);
 	Parser      parser(lex);
 	parser.parseFile(servers_);
+	validate();
+}
+
+// ---------------------------------------------------------------------------
+// Config::validate — semantic checks that the grammar alone cannot enforce.
+//
+// Rules (kept deliberately small for the mandatory grade; extend as needed):
+//   1. The config must contain at least one server block.
+//   2. Each server must declare at least one `listen` directive.
+//   3. No two servers may share the exact same (host, port). Per the subject
+//      virtual hosting is out of scope, so duplicate listens are a config
+//      error — not an opportunity for Host-header routing.
+//
+// Deferred checks (intentionally not run here):
+//   - Existence of `root` directories on disk: defer to request time, files
+//     can legitimately appear after startup.
+//   - Existence of CGI interpreters: same reasoning.
+//   - Sanity of redirect targets: not knowable at parse time.
+// ---------------------------------------------------------------------------
+void Config::validate() {
+	if (servers_.empty())
+		throw ConfigException("config: no server blocks defined");
+
+	// "host:port" -> index of the server that first claimed it. Keying on a
+	// flat string is the simplest dedupe; we don't need a std::pair here.
+	std::map<std::string, std::size_t> seen_listens;
+
+	for (std::size_t i = 0; i < servers_.size(); ++i) {
+		const ServerConfig& s = servers_[i];
+
+		if (s.listens.empty()) {
+			std::stringstream msg;
+			msg << "config: server[" << i << "] has no 'listen' directive";
+			throw ConfigException(msg.str());
+		}
+
+		for (std::size_t j = 0; j < s.listens.size(); ++j) {
+			const ListenSpec& ls = s.listens[j];
+
+			std::stringstream key_ss;
+			key_ss << ls.host << ":" << ls.port;
+			const std::string key = key_ss.str();
+
+			std::map<std::string, std::size_t>::iterator it
+				= seen_listens.find(key);
+			if (it != seen_listens.end()) {
+				std::stringstream msg;
+				msg << "config: duplicate listen " << key
+					<< " (server[" << i << "] conflicts with server["
+					<< it->second << "])";
+				throw ConfigException(msg.str());
+			}
+			seen_listens[key] = i;
+		}
+	}
 }
