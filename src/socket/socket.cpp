@@ -90,6 +90,14 @@ int Socket::getFileDescriptor() const {
 // propagating. The fd is closed inline at each failure point, matching the
 // existing single-arg ctor pattern above.
 Socket::Socket(const std::string& host, int port) : fd_socket(-1) {
+	// The config validator (Config::validate) does not yet enforce port
+	// range, so guard here. A silent uint16_t truncation later (htons cast)
+	// would let `listen 70000;` bind to a different port without warning.
+	if (port <= 0 || port > 65535) {
+		throw SocketException("invalid port (must be 1-65535): "
+		                      + toString(port));
+	}
+
 	struct addrinfo  hints;
 	struct addrinfo* res = NULL;
 
@@ -105,6 +113,8 @@ Socket::Socket(const std::string& host, int port) : fd_socket(-1) {
 		throw SocketException("getaddrinfo failed for host '" + host + "'");
 	}
 
+	// AI_NUMERICHOST + AF_INET => getaddrinfo returns a chain of length 1,
+	// so we walk only res (ignore res->ai_next).
 	try {
 		fd_socket = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 		if (fd_socket == -1) {
