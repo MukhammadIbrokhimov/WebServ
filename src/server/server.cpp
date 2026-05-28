@@ -24,85 +24,162 @@ void Server::setup_signal_handlers() {
 	}
 }
 
-// constructor
-Server::Server(Socket &_socket) : socket(_socket) {
+// Legacy ctor — to be removed in Task 5. Sets up the single-Socket reference
+// path so existing main.cpp still works while we stage the refactor.
+Server::Server(Socket &_socket)
+	: poll_fds()
+	, config_(NULL)
+	, listeners_()
+	, fd_to_server_()
+	, legacy_socket_(&_socket)
+{
 	setup_signal_handlers();
-	LOG_DEBUG("<class Server -> server() : socket received " + toString(socket.getFileDescriptor()));
+	LOG_DEBUG("<class Server -> legacy ctor> socket fd "
+	          + toString(_socket.getFileDescriptor()));
 }
-// destructor
-// Note: we do NOT close `socket` here — Server only borrows it (reference
-// member). The listening Socket is owned by main() and will close itself
-// when its destructor runs. Closing here as well caused a double ::close()
-// on the same fd, which is unsafe (the kernel may have reused that fd
-// number for an unrelated file by then).
+
+// Phase 1.5 ctor. The body has three phases:
+//   1. Walk cfg.servers() and allocate one Socket per ListenSpec.
+//   2. Each allocation that succeeds is pushed into listeners_ and registered
+//      in fd_to_server_ immediately, so a later failure has a precise list of
+//      what to clean up.
+//   3. setup_signal_handlers() runs last so the invariant "handlers installed
+//      iff Server fully constructed" holds.
+//
+// If any Socket ctor throws, we catch (...) and delete every Socket we
+// already own, then rethrow. This is necessary because a constructor that
+// throws does NOT trigger its own destructor — without manual cleanup we
+// leak.
+Server::Server(const Config& cfg)
+	: poll_fds()
+	, config_(&cfg)
+	, listeners_()
+	, fd_to_server_()
+	, legacy_socket_(NULL)
+{
+	try {
+		const std::vector<ServerConfig>& servers = cfg.servers();
+		for (std::size_t i = 0; i < servers.size(); ++i) {
+			const ServerConfig& srv = servers[i];
+			for (std::size_t j = 0; j < srv.listens.size(); ++j) {
+				const ListenSpec& ls = srv.listens[j];
+
+				Socket* s = new Socket(ls.host, ls.port);
+				listeners_.push_back(s);
+				fd_to_server_[s->getFileDescriptor()] = &srv;
+				s->startListening();
+			}
+		}
+	} catch (...) {
+		// Partial-init cleanup: a Socket ctor or startListening() threw.
+		// listeners_ contains only the ones that fully succeeded; delete
+		// each (their dtors close their fds).
+		for (std::size_t k = 0; k < listeners_.size(); ++k)
+			delete listeners_[k];
+		listeners_.clear();
+		fd_to_server_.clear();
+		throw;
+	}
+
+	setup_signal_handlers();
+	LOG_DEBUG("<class Server> ready, " + toString(listeners_.size())
+	          + " listener(s)");
+}
+
+// Destructor: only runs when the ctor completed. We close any still-open
+// client fds via the existing cleanup_sockets() helper, then delete every
+// owned listener Socket (each Socket's own dtor closes its fd).
+//
+// Note: under the legacy ctor path (legacy_socket_ != NULL, listeners_
+// empty) we still avoid double-closing the borrowed socket — the loop
+// just iterates over an empty listeners_ vector.
 Server::~Server() {
+	cleanup_sockets();
+	for (std::size_t i = 0; i < listeners_.size(); ++i)
+		delete listeners_[i];
+	listeners_.clear();
 }
 
 // main server loop
 void Server::run() {
-	// add the listening socket to the poll_fds vector
-	LOG_DEBUG("<class Server -> run() : adding listening socket to poll_fds");
-	struct pollfd pfd_listener = {socket.getFileDescriptor(), POLLIN, 0};
-	poll_fds.push_back(pfd_listener);
-	
-	// start the server loop
+	// Seed poll_fds with all listening fds. We support both the legacy
+	// single-socket path (until Task 5 removes it) and the new vector path.
+	LOG_DEBUG("<class Server -> run() : adding listening sockets to poll_fds");
+	if (!listeners_.empty()) {
+		for (std::size_t i = 0; i < listeners_.size(); ++i) {
+			struct pollfd pfd = {listeners_[i]->getFileDescriptor(),
+			                     POLLIN, 0};
+			poll_fds.push_back(pfd);
+		}
+	} else if (legacy_socket_ != NULL) {
+		struct pollfd pfd = {legacy_socket_->getFileDescriptor(), POLLIN, 0};
+		poll_fds.push_back(pfd);
+	}
+
 	while (g_shutdown != 1) {
 		LOG_DEBUG("<class Server -> run() : polling for events");
 		int ret = poll(&poll_fds[0], poll_fds.size(), TIME_OUT_MS);
 		if (ret == -1) {
 			if (errno == EINTR) {
-				LOG_DEBUG("<class Server -> run() : EINTR received, checking shutdown flag");
-				continue; // Interrupted by signal, check shutdown flag and continue
+				LOG_DEBUG("<class Server -> run() : EINTR, checking shutdown");
+				continue;
 			}
 			LOG_ERROR("<class Server> Poll error");
 			throw SocketException("<class Server> Poll error");
-		} 
-		// timeout occurred
+		}
 		if (ret == 0) continue;
-		// check for events
+
 		for (size_t i = 0; i < poll_fds.size(); ++i) {
-			if ((poll_fds[i].revents & (POLLHUP | POLLERR)) && poll_fds[i].fd != socket.getFileDescriptor()) {
-				// handle disconnection or error
-				LOG_DEBUG("<class Server -> run(): Client disconnected or error on fd: " + toString(poll_fds[i].fd));
-				::close(poll_fds[i].fd);
+			const int fd = poll_fds[i].fd;
+			const bool is_listener =
+				fd_to_server_.count(fd) > 0
+				|| (legacy_socket_ != NULL
+				    && fd == legacy_socket_->getFileDescriptor());
+
+			if ((poll_fds[i].revents & (POLLHUP | POLLERR)) && !is_listener) {
+				LOG_DEBUG("<class Server -> run(): Client disconnected/error fd "
+				          + toString(fd));
+				::close(fd);
 				poll_fds.erase(poll_fds.begin() + i--);
 				continue;
 			}
 			if (poll_fds[i].revents & POLLIN) {
-				if (poll_fds[i].fd == socket.getFileDescriptor()) {
-					// New incoming connection on the listening socket.
-					LOG_DEBUG("<class Server -> run() : new incoming connection");
-					int client_fd = socket.acceptClient();
+				if (is_listener) {
+					LOG_DEBUG("<class Server -> run() : new incoming connection on fd "
+					          + toString(fd));
+					int client_fd = -1;
+					// find the Socket* that owns this fd and accept on it
+					for (std::size_t k = 0; k < listeners_.size(); ++k) {
+						if (listeners_[k]->getFileDescriptor() == fd) {
+							client_fd = listeners_[k]->acceptClient();
+							break;
+						}
+					}
+					if (client_fd == -1 && legacy_socket_ != NULL
+					    && fd == legacy_socket_->getFileDescriptor())
+					{
+						client_fd = legacy_socket_->acceptClient();
+					}
 					if (client_fd != -1) {
-						// Subscribe to POLLIN only. A fresh TCP socket is
-						// already writable, so registering POLLOUT here
-						// would fire on the very next poll() iteration
-						// with nothing to actually send. POLLOUT is
-						// requested later, in Phase 2.5, only once a
-						// response is queued for this client.
 						struct pollfd pfd_client = {client_fd, POLLIN, 0};
 						poll_fds.push_back(pfd_client);
-						LOG_DEBUG("<class Server -> run() : New client connected, fd: " + toString(client_fd));
+						LOG_DEBUG("<class Server -> run() : New client fd "
+						          + toString(client_fd));
 					}
 				} else {
-					// Data available from an existing client.
-					LOG_DEBUG("<class Server -> run() : Data available to read on client fd: " + toString(poll_fds[i].fd));
-					if (!handle_client_data_read(poll_fds[i].fd)) {
-						// recv() returned 0 (peer closed) or -1 (error).
-						// Per the subject we cannot inspect errno after
-						// read/write, so any failure here means "drop it".
-						::close(poll_fds[i].fd);
+					LOG_DEBUG("<class Server -> run() : Data ready on client fd "
+					          + toString(fd));
+					if (!handle_client_data_read(fd)) {
+						::close(fd);
 						poll_fds.erase(poll_fds.begin() + i--);
-						continue; // skip the POLLOUT check below for this slot
+						continue;
 					}
 				}
 			}
 			if (poll_fds[i].revents & POLLOUT) {
-				// Phase 1 stub: nothing is queued for writing yet, and we
-				// no longer register POLLOUT on accept, so in practice this
-				// branch is dormant until Phase 2 starts queuing responses.
-				LOG_DEBUG("<class Server -> run() : Ready to write on client fd: " + toString(poll_fds[i].fd));
-				handle_client_data_write(poll_fds[i].fd);
+				LOG_DEBUG("<class Server -> run() : Ready to write on fd "
+				          + toString(fd));
+				handle_client_data_write(fd);
 			}
 		}
 	}
@@ -142,13 +219,21 @@ void Server::handle_client_data_write(int client_fd) {
 	LOG_DEBUG("<class Server> Writing data to client fd: " + toString(client_fd));
 }
 
-// Cleanup function to close all client sockets
+// Closes any still-open *client* fds in poll_fds. Listener fds are NOT
+// closed here — their lifetime belongs to the owning Socket objects (either
+// legacy_socket_ or the listeners_ vector); closing here would double-close.
 void Server::cleanup_sockets() {
-	LOG_DEBUG("<class Server -> cleanup_sockets() : Cleaning up client sockets");
+	LOG_DEBUG("<class Server -> cleanup_sockets() : closing client fds");
 	for (size_t i = 0; i < poll_fds.size(); ++i) {
-		if (poll_fds[i].fd != socket.getFileDescriptor()) {
-			LOG_DEBUG("<class Server -> cleanup_sockets() : Closing client socket fd: " + toString(poll_fds[i].fd));
-			::close(poll_fds[i].fd);
+		const int fd = poll_fds[i].fd;
+		const bool is_listener =
+			fd_to_server_.count(fd) > 0
+			|| (legacy_socket_ != NULL
+			    && fd == legacy_socket_->getFileDescriptor());
+		if (!is_listener) {
+			LOG_DEBUG("<class Server -> cleanup_sockets() : closing client fd "
+			          + toString(fd));
+			::close(fd);
 		}
 	}
 	poll_fds.clear();
