@@ -31,6 +31,11 @@ class Server {
 		const Config*                                config_;
 		std::vector<Socket*>                         listeners_;
 		std::map<int, const ServerConfig*>           fd_to_server_;
+		// Parallel map keyed on the same listener fds as fd_to_server_. Lets
+		// run() jump straight to the owning Socket on POLLIN instead of
+		// scanning listeners_ linearly — matters once Phase 4's stress test
+		// pushes the listener count up.
+		std::map<int, Socket*>                       fd_to_listener_;
 		// --------------------------------------------------------------------
 
 		Server(const Server&);

@@ -41,6 +41,7 @@ Server::Server(const Config& cfg)
 	, config_(&cfg)
 	, listeners_()
 	, fd_to_server_()
+	, fd_to_listener_()
 {
 	try {
 		const std::vector<ServerConfig>& servers = cfg.servers();
@@ -51,7 +52,8 @@ Server::Server(const Config& cfg)
 
 				Socket* s = new Socket(ls.host, ls.port);
 				listeners_.push_back(s);
-				fd_to_server_[s->getFileDescriptor()] = &srv;
+				fd_to_server_[s->getFileDescriptor()]   = &srv;
+				fd_to_listener_[s->getFileDescriptor()] = s;
 				s->startListening();
 			}
 		}
@@ -63,6 +65,7 @@ Server::Server(const Config& cfg)
 			delete listeners_[k];
 		listeners_.clear();
 		fd_to_server_.clear();
+		fd_to_listener_.clear();
 		throw;
 	}
 
@@ -119,14 +122,10 @@ void Server::run() {
 				if (is_listener) {
 					LOG_DEBUG("<class Server -> run() : new incoming connection on fd "
 					          + toString(fd));
-					int client_fd = -1;
-					// find the Socket* that owns this fd and accept on it
-					for (std::size_t k = 0; k < listeners_.size(); ++k) {
-						if (listeners_[k]->getFileDescriptor() == fd) {
-							client_fd = listeners_[k]->acceptClient();
-							break;
-						}
-					}
+					// O(log N) jump straight to the owning Socket. The map is
+					// kept in lock-step with fd_to_server_ in the ctor, so a
+					// hit here is guaranteed whenever is_listener is true.
+					int client_fd = fd_to_listener_[fd]->acceptClient();
 					if (client_fd != -1) {
 						struct pollfd pfd_client = {client_fd, POLLIN, 0};
 						poll_fds.push_back(pfd_client);
