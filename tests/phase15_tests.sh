@@ -120,6 +120,18 @@ else
     kill -INT "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
 fi
 
+# Task 6: one server, two listen directives
+assert_listens_on_ports \
+    "task6_multi_port_same_server" \
+    "config/test_multi_port.conf" \
+    8080 8081
+
+# Task 6: two server blocks on distinct ports
+assert_listens_on_ports \
+    "task6_two_servers" \
+    "config/test_two_servers.conf" \
+    8090 9090
+
 # --- tests appear here, added per task ---
 
 echo
