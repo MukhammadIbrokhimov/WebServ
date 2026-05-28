@@ -1,4 +1,6 @@
 #include "../../includes/webserv.hpp"
+#include <netdb.h>
+#include <cstring>
 
 
 // Constructor with port number and create a socket with AF_INET and SOCK_STREAM
@@ -78,4 +80,82 @@ int Socket::acceptClient() {
 // get the file descriptor of the socket
 int Socket::getFileDescriptor() const {
 	return fd_socket;
+}
+
+// Phase 1.5: config-driven ctor. Two resources are acquired here and must
+// be released on every throw path:
+//   1. the addrinfo* chain returned by getaddrinfo  -> freeaddrinfo
+//   2. the fd returned by socket()                   -> ::close(fd)
+// We nest a try/catch around steps 2-4 so any throw runs freeaddrinfo before
+// propagating. The fd is closed inline at each failure point, matching the
+// existing single-arg ctor pattern above.
+Socket::Socket(const std::string& host, int port) : fd_socket(-1) {
+	struct addrinfo  hints;
+	struct addrinfo* res = NULL;
+
+	std::memset(&hints, 0, sizeof(hints));
+	hints.ai_family   = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags    = AI_NUMERICHOST | AI_PASSIVE;
+
+	// service NULL + port written manually into the sockaddr below; we don't
+	// pass a service string because we already have the integer port.
+	if (getaddrinfo(host.c_str(), NULL, &hints, &res) != 0 || res == NULL) {
+		LOG_ERROR("<class Socket> getaddrinfo failed for " + host);
+		throw SocketException("getaddrinfo failed for host '" + host + "'");
+	}
+
+	try {
+		fd_socket = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+		if (fd_socket == -1) {
+			LOG_ERROR("<class Socket> Failed to create socket");
+			throw SocketException("Failed to create socket");
+		}
+
+		// SO_REUSEADDR: lets us re-bind a port that is still in TIME_WAIT from
+		// a previous instance. Subject p.6 lists setsockopt in the allowed
+		// functions table. Must be set BEFORE bind().
+		int yes = 1;
+		if (setsockopt(fd_socket, SOL_SOCKET, SO_REUSEADDR,
+		               &yes, sizeof(yes)) == -1)
+		{
+			LOG_ERROR("<class Socket> setsockopt SO_REUSEADDR failed");
+			::close(fd_socket);
+			fd_socket = -1;
+			throw SocketException("setsockopt SO_REUSEADDR failed");
+		}
+
+		if (fcntl(fd_socket, F_SETFL, O_NONBLOCK) == -1) {
+			LOG_ERROR("<class Socket> Failed to set socket to non-blocking");
+			::close(fd_socket);
+			fd_socket = -1;
+			throw SocketException("Failed to set socket to non-blocking");
+		}
+
+		// Copy the resolved address into our member (so we don't depend on
+		// res after freeaddrinfo) and overwrite the port field with the
+		// caller's integer port (getaddrinfo left it at 0 since service was
+		// NULL). htons because sin_port is network byte order.
+		std::memcpy(&_address, res->ai_addr, sizeof(struct sockaddr_in));
+		_address.sin_port = htons(static_cast<uint16_t>(port));
+
+		if (bind(fd_socket, (struct sockaddr*)&_address,
+		         sizeof(_address)) == -1)
+		{
+			LOG_ERROR("<class Socket> Failed to bind socket on "
+			          + host + ":" + toString(port));
+			::close(fd_socket);
+			fd_socket = -1;
+			throw SocketException("bind failed on " + host + ":"
+			                      + toString(port));
+		}
+
+		LOG_DEBUG("<class Socket> Socket bound to " + host + ":"
+		          + toString(port) + " fd=" + toString(fd_socket));
+	} catch (...) {
+		// any throw after getaddrinfo succeeded must free the chain
+		freeaddrinfo(res);
+		throw;
+	}
+	freeaddrinfo(res);
 }
