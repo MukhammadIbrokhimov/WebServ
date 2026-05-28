@@ -82,6 +82,44 @@ if [ ! -x ./webserv ]; then
     exit 2
 fi
 
+# Task 1 (deferred): duplicate listen rejected when validator runs through main()
+assert_exits_nonzero_with \
+    "task1_duplicate_listen_rejected" \
+    "config/test_duplicate.conf" \
+    "duplicate listen 0.0.0.0:8080"
+
+# Task 4: missing config file
+assert_exits_nonzero_with \
+    "task4_missing_config" \
+    "/tmp/definitely-does-not-exist.conf" \
+    "fatal:"
+
+# Task 4: argc > 2 (too many args) — bespoke check because helper takes 1 path arg
+out=$(./webserv config/default.conf foo bar 2>&1)
+rc=$?
+if [ $rc -ne 0 ] && echo "$out" | grep -qF "usage:"; then
+    PASS=$((PASS+1))
+else
+    FAIL=$((FAIL+1))
+    FAILED_TESTS+=("task4_too_many_args: rc=$rc, output=$out")
+fi
+
+# Task 4: default-path happy case — webserv with no arg listens on 8080
+./webserv >/tmp/webserv.out 2>&1 &
+PID=$!
+sleep 1
+if ! kill -0 "$PID" 2>/dev/null; then
+    FAIL=$((FAIL+1)); FAILED_TESTS+=("task4_default_path: webserv exited:
+$(cat /tmp/webserv.out)")
+else
+    if lsof -iTCP:8080 -sTCP:LISTEN -P -n 2>/dev/null | grep -q webserv; then
+        PASS=$((PASS+1))
+    else
+        FAIL=$((FAIL+1)); FAILED_TESTS+=("task4_default_path: not listening on 8080")
+    fi
+    kill -INT "$PID" 2>/dev/null; wait "$PID" 2>/dev/null
+fi
+
 # --- tests appear here, added per task ---
 
 echo

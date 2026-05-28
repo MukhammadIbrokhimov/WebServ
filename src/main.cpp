@@ -92,9 +92,6 @@ static int dumpConfig(const std::string& path) {
 // --- end DEV-ONLY ---------------------------------------------------------
 
 int main(int argc, char **argv) {
-	(void)argc;
-	(void)argv;
-
 	if (getenv("DEBUG")) {
 		Logger::setLevel(Logger::DEBUG);
 		LOG_INFO("Debug mode enabled.");
@@ -104,10 +101,20 @@ int main(int argc, char **argv) {
 	if (const char* path = getenv("CONFIG_DUMP"))
 		return dumpConfig(path);
 
-	std::cout << "WebServ starting..." << std::endl;
-	Socket server_socket(8080);
-	server_socket.startListening();
-	Server web_server(server_socket);
-	web_server.run();
+	if (argc > 2) {
+		std::cerr << "usage: ./webserv [config_file]" << std::endl;
+		return 1;
+	}
+	const std::string path = (argc == 2) ? argv[1] : "config/default.conf";
+
+	try {
+		Config cfg;
+		cfg.load(path);
+		Server srv(cfg);
+		srv.run();
+	} catch (const std::exception& e) {
+		std::cerr << "fatal: " << e.what() << std::endl;
+		return 1;
+	}
 	return 0;
 }
