@@ -132,6 +132,12 @@ assert_listens_on_ports \
     "config/test_two_servers.conf" \
     8090 9090
 
+# Polish: bad syntax — config parser must reject cleanly
+assert_exits_nonzero_with \
+    "polish_bad_syntax_rejected" \
+    "config/test_bad_syntax.conf" \
+    "fatal:"
+
 # --- tests appear here, added per task ---
 
 echo

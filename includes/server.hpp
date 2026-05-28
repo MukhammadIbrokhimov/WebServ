@@ -11,8 +11,6 @@
 
 #include "string_utils.hpp"
 
-class Socket;
-
 extern volatile sig_atomic_t g_shutdown;
 
 class Server {
@@ -24,6 +22,12 @@ class Server {
 		// than this Server, so the pointer is safe for our lifetime.
 		// Phase 2.4's router will read fd_to_server_ to know which server
 		// block a request lands on.
+		//
+		// INVARIANT: `Config` must NOT be mutated after `Config::load()` for
+		// the lifetime of this Server. fd_to_server_ stores raw pointers to
+		// elements of cfg.servers()'s internal vector; any push_back would
+		// reallocate that vector and invalidate every pointer in the map.
+		// Today main() loads cfg once and never touches it again — keep that.
 		const Config*                                config_;
 		std::vector<Socket*>                         listeners_;
 		std::map<int, const ServerConfig*>           fd_to_server_;
