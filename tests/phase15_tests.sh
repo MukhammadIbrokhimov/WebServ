@@ -13,6 +13,13 @@ PASS=0
 FAIL=0
 FAILED_TESTS=()
 
+# Kill any backgrounded ./webserv on script exit (normal, error, or Ctrl+C)
+# so a failed run never leaves stray listeners holding ports.
+cleanup() {
+    pkill -P $$ -f "./webserv" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
 assert_exits_nonzero_with() {
     local name=$1
     local config=$2
