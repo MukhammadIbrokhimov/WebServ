@@ -23,7 +23,6 @@ class Socket {
 		Socket& operator=(const Socket&);
 
 	public:
-		Socket(int port);
 		// Phase 1.5: config-driven listener constructor.
 		// Resolves `host` (a numeric IPv4 string like "0.0.0.0" or "127.0.0.1")
 		// via getaddrinfo with AI_NUMERICHOST so no DNS happens. Sets

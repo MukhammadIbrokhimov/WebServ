@@ -29,18 +29,10 @@ class Server {
 		std::map<int, const ServerConfig*>           fd_to_server_;
 		// --------------------------------------------------------------------
 
-		// Legacy single-socket reference — to be removed in Task 5 once
-		// nothing constructs the legacy way. Pointer not reference so the
-		// new ctor can leave it NULL.
-		Socket* legacy_socket_;
-
 		Server(const Server&);
 		Server& operator=(const Server&);
 
 	public:
-		// Legacy ctor — slated for removal in Task 5.
-		Server(Socket &_socket);
-
 		// Phase 1.5 ctor. Walks cfg.servers(), opens one Socket per
 		// ListenSpec, populates fd_to_server_. Partial-init failures are
 		// cleaned up inside the ctor so the caller never sees a half-built

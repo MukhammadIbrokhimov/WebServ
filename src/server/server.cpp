@@ -24,20 +24,6 @@ void Server::setup_signal_handlers() {
 	}
 }
 
-// Legacy ctor — to be removed in Task 5. Sets up the single-Socket reference
-// path so existing main.cpp still works while we stage the refactor.
-Server::Server(Socket &_socket)
-	: poll_fds()
-	, config_(NULL)
-	, listeners_()
-	, fd_to_server_()
-	, legacy_socket_(&_socket)
-{
-	setup_signal_handlers();
-	LOG_DEBUG("<class Server -> legacy ctor> socket fd "
-	          + toString(_socket.getFileDescriptor()));
-}
-
 // Phase 1.5 ctor. The body has three phases:
 //   1. Walk cfg.servers() and allocate one Socket per ListenSpec.
 //   2. Each allocation that succeeds is pushed into listeners_ and registered
@@ -55,7 +41,6 @@ Server::Server(const Config& cfg)
 	, config_(&cfg)
 	, listeners_()
 	, fd_to_server_()
-	, legacy_socket_(NULL)
 {
 	try {
 		const std::vector<ServerConfig>& servers = cfg.servers();
@@ -89,10 +74,6 @@ Server::Server(const Config& cfg)
 // Destructor: only runs when the ctor completed. We close any still-open
 // client fds via the existing cleanup_sockets() helper, then delete every
 // owned listener Socket (each Socket's own dtor closes its fd).
-//
-// Note: under the legacy ctor path (legacy_socket_ != NULL, listeners_
-// empty) we still avoid double-closing the borrowed socket — the loop
-// just iterates over an empty listeners_ vector.
 Server::~Server() {
 	cleanup_sockets();
 	for (std::size_t i = 0; i < listeners_.size(); ++i)
@@ -102,17 +83,11 @@ Server::~Server() {
 
 // main server loop
 void Server::run() {
-	// Seed poll_fds with all listening fds. We support both the legacy
-	// single-socket path (until Task 5 removes it) and the new vector path.
+	// Seed poll_fds with all listening fds.
 	LOG_DEBUG("<class Server -> run() : adding listening sockets to poll_fds");
-	if (!listeners_.empty()) {
-		for (std::size_t i = 0; i < listeners_.size(); ++i) {
-			struct pollfd pfd = {listeners_[i]->getFileDescriptor(),
-			                     POLLIN, 0};
-			poll_fds.push_back(pfd);
-		}
-	} else if (legacy_socket_ != NULL) {
-		struct pollfd pfd = {legacy_socket_->getFileDescriptor(), POLLIN, 0};
+	for (std::size_t i = 0; i < listeners_.size(); ++i) {
+		struct pollfd pfd = {listeners_[i]->getFileDescriptor(),
+		                     POLLIN, 0};
 		poll_fds.push_back(pfd);
 	}
 
@@ -131,10 +106,7 @@ void Server::run() {
 
 		for (size_t i = 0; i < poll_fds.size(); ++i) {
 			const int fd = poll_fds[i].fd;
-			const bool is_listener =
-				fd_to_server_.count(fd) > 0
-				|| (legacy_socket_ != NULL
-				    && fd == legacy_socket_->getFileDescriptor());
+			const bool is_listener = fd_to_server_.count(fd) > 0;
 
 			if ((poll_fds[i].revents & (POLLHUP | POLLERR)) && !is_listener) {
 				LOG_DEBUG("<class Server -> run(): Client disconnected/error fd "
@@ -154,11 +126,6 @@ void Server::run() {
 							client_fd = listeners_[k]->acceptClient();
 							break;
 						}
-					}
-					if (client_fd == -1 && legacy_socket_ != NULL
-					    && fd == legacy_socket_->getFileDescriptor())
-					{
-						client_fd = legacy_socket_->acceptClient();
 					}
 					if (client_fd != -1) {
 						struct pollfd pfd_client = {client_fd, POLLIN, 0};
@@ -220,16 +187,13 @@ void Server::handle_client_data_write(int client_fd) {
 }
 
 // Closes any still-open *client* fds in poll_fds. Listener fds are NOT
-// closed here — their lifetime belongs to the owning Socket objects (either
-// legacy_socket_ or the listeners_ vector); closing here would double-close.
+// closed here — their lifetime belongs to the owning Socket objects in the
+// listeners_ vector; closing here would double-close.
 void Server::cleanup_sockets() {
 	LOG_DEBUG("<class Server -> cleanup_sockets() : closing client fds");
 	for (size_t i = 0; i < poll_fds.size(); ++i) {
 		const int fd = poll_fds[i].fd;
-		const bool is_listener =
-			fd_to_server_.count(fd) > 0
-			|| (legacy_socket_ != NULL
-			    && fd == legacy_socket_->getFileDescriptor());
+		const bool is_listener = fd_to_server_.count(fd) > 0;
 		if (!is_listener) {
 			LOG_DEBUG("<class Server -> cleanup_sockets() : closing client fd "
 			          + toString(fd));

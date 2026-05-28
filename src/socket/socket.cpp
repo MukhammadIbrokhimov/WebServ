@@ -3,34 +3,6 @@
 #include <cstring>
 
 
-// Constructor with port number and create a socket with AF_INET and SOCK_STREAM
-Socket::Socket(int port) : fd_socket(socket(AF_INET, SOCK_STREAM, 0)) {
-	if (fd_socket == -1) {
-		LOG_ERROR("<class Socket> Failed to create socket");
-		::close(fd_socket);
-		throw SocketException("Failed to create socket");
-	}
-
-	// set the socket to non-blocking
-	if (fcntl(fd_socket, F_SETFL, O_NONBLOCK) == -1) {
-		LOG_ERROR("<class Socket> Failed to set socket to non-blocking");
-		::close(fd_socket);
-		throw SocketException("Failed to set socket to non-blocking");
-	}
-
-	// bind the socket to the port
-	_address.sin_family = AF_INET;
-	_address.sin_port = htons(port);
-	_address.sin_addr.s_addr = INADDR_ANY;
-	if (bind(fd_socket, (struct sockaddr *)&_address, sizeof(_address)) == -1) {
-		LOG_ERROR("<class Socket> Failed to bind socket");
-		::close(fd_socket);
-		throw SocketException("Failed to bind socket");
-	}
-	LOG_DEBUG("<class Socket> Socket bound to port " + toString(port));
-	LOG_DEBUG("<class Socket> Socket file descriptor: " + toString(fd_socket));
-}
-
 // destructor to close the socket will call the close method
 Socket::~Socket() {
 	Socket::close();
