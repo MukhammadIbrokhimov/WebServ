@@ -2,6 +2,7 @@
 
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netdb.h>
 #include <unistd.h>
 #include <string>
 #include <fcntl.h>
@@ -22,7 +23,14 @@ class Socket {
 		Socket& operator=(const Socket&);
 
 	public:
-		Socket(int port);
+		// Phase 1.5: config-driven listener constructor.
+		// Resolves `host` (a numeric IPv4 string like "0.0.0.0" or "127.0.0.1")
+		// via getaddrinfo with AI_NUMERICHOST so no DNS happens. Sets
+		// SO_REUSEADDR before bind so we can restart inside TIME_WAIT without
+		// EADDRINUSE. Throws SocketException on any setup failure; the body
+		// guarantees the fd and addrinfo chain are released on every throw
+		// path (see socket.cpp for the cleanup contract).
+		Socket(const std::string& host, int port);
 		~Socket();
 		void startListening(int backlog = SOMAXCONN);
 		void close();

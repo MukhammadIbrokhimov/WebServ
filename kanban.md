@@ -195,7 +195,7 @@
 
 ---
 
-### [ ] 1.5: Load Config & Initialize Server on Startup
+### [ Completed ] 1.5: Load Config & Initialize Server on Startup
 **Assignee:** Dev B  
 **Description:**  
 - Implement `main(int argc, char** argv)`
@@ -207,10 +207,10 @@
 - Graceful error handling: print to stderr and exit(1) on config error
 
 **DoD:**
-- [ ] `./webserv` loads default.conf
-- [ ] `./webserv custom.conf` loads custom config
-- [ ] All listening ports open successfully
-- [ ] Error messages clear on config failure
+- [x] `./webserv` loads default.conf (path: `config/default.conf`)
+- [x] `./webserv custom.conf` loads custom config
+- [x] All listening ports open successfully
+- [x] Error messages clear on config failure
 
 ---
 
