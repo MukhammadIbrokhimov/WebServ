@@ -5,29 +5,25 @@
 #include <map>
 #include <cstddef>   // size_t
 
-// ---------------------------------------------------------------------------
-// Config data model.
+// just the data the parser fills in — deliberately no parsing logic in here.
+// I split it into stages on purpose: parser produces these structs, validator
+// checks them, server reads them and never writes. keeping the plain data on
+// its own means I can test each stage without dragging the others in.
 //
-// This header defines ONLY the data structures the parser will fill. There is
-// no parsing logic here on purpose — the parser is a separate stage that
-// produces these structs, the validator is a separate stage that checks them,
-// and the server consumes them read-only. Keeping the data model isolated
-// makes each stage independently testable.
-//
-//   - interface:port pairs              -> ListenSpec, ServerConfig::listens
-//   - default error pages               -> ServerConfig::error_pages
-//   - max client body size              -> ServerConfig::client_max_body_size
-//   - accepted HTTP methods per route   -> LocationConfig::allowed_methods
-//   - HTTP redirection per route        -> LocationConfig::redirect
-//   - root per route (/kapouet example) -> LocationConfig::root
-//   - enable/disable directory listing  -> LocationConfig::autoindex
-//   - default file for directories      -> LocationConfig::index
-//   - upload storage location           -> LocationConfig::upload_store
-//   - CGI by file extension             -> LocationConfig::cgi
-// ---------------------------------------------------------------------------
+// the subject's required features map onto these fields like so:
+//   interface:port pairs              -> ListenSpec, ServerConfig::listens
+//   default error pages               -> ServerConfig::error_pages
+//   max client body size              -> ServerConfig::client_max_body_size
+//   accepted HTTP methods per route   -> LocationConfig::allowed_methods
+//   HTTP redirection per route        -> LocationConfig::redirect
+//   root per route (the /kapouet one) -> LocationConfig::root
+//   directory listing on/off          -> LocationConfig::autoindex
+//   default file for a directory      -> LocationConfig::index
+//   where uploads get stored          -> LocationConfig::upload_store
+//   CGI by file extension             -> LocationConfig::cgi
 
-// A single "listen" directive: which interface and which port. The parser
-// accepts three syntaxes and normalises them all into this struct:
+// one "listen" directive: an interface + a port. the parser takes all three
+// syntaxes below and squashes them into this same struct:
 //   listen 8080;              -> host = "0.0.0.0", port = 8080
 //   listen 127.0.0.1:8080;    -> host = "127.0.0.1", port = 8080
 //   listen 0.0.0.0:8080;      -> host = "0.0.0.0",  port = 8080
@@ -38,9 +34,9 @@ struct ListenSpec {
 	ListenSpec();
 };
 
-// Optional per-location redirect. C++98 has no std::optional, so we carry an
-// explicit `enabled` flag. The parser sets it true when the location has a
-// `return CODE TARGET;` directive.
+// optional per-location redirect. no std::optional in C++98, so I fake it with
+// an `enabled` bool — the parser flips it true when the location actually has a
+// `return CODE TARGET;`.
 struct Redirect {
 	int         code;
 	std::string target;
@@ -49,14 +45,15 @@ struct Redirect {
 	Redirect();
 };
 
-// All settings that can appear inside a `location` block.
+// everything that can live inside a `location` block.
 //
-// Empty-string and empty-vector conventions:
-//   - root.empty()             -> inherit ServerConfig::root
-//   - index.empty()            -> no default file (autoindex or 403/404 decides)
-//   - allowed_methods.empty()  -> all methods allowed (matches nginx default)
-//   - upload_store.empty()     -> uploads not configured for this location
-//   - cgi.empty()              -> no CGI on this location
+// instead of extra "is this set" flags I lean on empty string / empty vector
+// to mean "not set", so I have to remember what empty means for each:
+//   root.empty()             -> fall back to ServerConfig::root
+//   index.empty()            -> no default file (autoindex or a 403/404 decides)
+//   allowed_methods.empty()  -> allow everything (same as nginx's default)
+//   upload_store.empty()     -> uploads not configured here
+//   cgi.empty()              -> no CGI on this location
 struct LocationConfig {
 	std::string                         path;
 	std::vector<std::string>            allowed_methods;
@@ -70,7 +67,7 @@ struct LocationConfig {
 	LocationConfig();
 };
 
-// One `server { ... }` block from the config file.
+// one `server { ... }` block from the file.
 struct ServerConfig {
 	std::vector<ListenSpec>           listens;
 	std::string                       server_name;
@@ -82,33 +79,30 @@ struct ServerConfig {
 	ServerConfig();
 };
 
-// Top-level configuration: a list of server blocks and the operations to
-// produce / inspect it.
-//
-// Methods are declared here but implemented in later steps. The header
-// compiles on its own; the implementation file will appear as we build the
-// lexer, parser, and validator one at a time.
+// the top of the tree: a list of server blocks plus the calls to build and
+// read it. I added these one at a time as I built the lexer, then parser, then
+// validator — the header compiles fine on its own in the meantime.
 class Config {
 	private:
 		std::vector<ServerConfig> servers_;
 
-		// Semantic checks run after parsing. Throws ConfigException with a
-		// human-readable message if any rule is violated. See config.cpp
-		// for the rule list.
+		// the semantic checks I run after parsing. throws ConfigException with
+		// a readable message if a rule is broken. the actual rules are listed
+		// in config.cpp.
 		void validate();
 
-		// Non-copyable: a Config is built once at startup and read forever.
+		// non-copyable: I build a Config once at startup and only ever read it.
 		Config(const Config&);
 		Config& operator=(const Config&);
 
 	public:
 		Config();
 
-		// Reads `path`, runs lexer -> parser -> validator. Throws
-		// ConfigException on any error encountered along the way.
+		// read `path`, then lexer -> parser -> validator. throws
+		// ConfigException the moment anything along that chain goes wrong.
 		void load(const std::string& path);
 
-		// Read-only access for the rest of the server.
+		// read-only handle for the rest of the server.
 		const std::vector<ServerConfig>& servers() const;
 
 };

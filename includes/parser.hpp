@@ -6,66 +6,60 @@
 #include "config.hpp"
 #include "lexer.hpp"
 
-// ---------------------------------------------------------------------------
-// Parser: consumes a token stream from a Lexer and produces a list of
-// ServerConfig structs. The single public entry point is parseFile(); the
-// recursion lives entirely in the private grammar methods.
+// Parser: eats the Lexer's token stream and builds a list of ServerConfig
+// structs. only parseFile() is public; all the recursion hides in the private
+// grammar methods.
 //
-// One method per grammar production — that's recursive descent. The naming
-// mirrors the BNF directly so you can read the grammar straight off the
-// declarations.
-//
-// Errors: any malformed input throws ConfigException with a message of the
-// form "<origin>:<line>: <what went wrong>". The lexer never throws; all
-// failure paths are here.
-// ---------------------------------------------------------------------------
+// it's a recursive-descent parser — one method per grammar production, named
+// after the production, so I can basically read the grammar off the method
+// list. anything malformed throws ConfigException reading
+// "<origin>:<line>: <what broke>". the lexer never throws, so every failure
+// path is in here.
 class Parser {
 	public:
-		// Caller owns the Lexer. We just borrow it (reference, no ownership).
+		// the caller keeps the Lexer; I just hold a reference, no ownership.
 		Parser(Lexer& lex);
 
-		// Top-level entry point. Clears `out` and appends one ServerConfig
-		// per server block found in the input.
+		// the entry point. clears `out`, then appends one ServerConfig per
+		// server block in the input.
 		void parseFile(std::vector<ServerConfig>& out);
 
 	private:
-		// Sub-Parser constructor: used when recursing into an included file.
-		// Shares the cycle guard (so cycles across includes can be detected)
-		// and carries a base directory for resolving further relative paths.
+		// the ctor I use when recursing into an included file. it shares the
+		// cycle guard (so I can spot cycles that span includes) and carries the
+		// base dir for resolving any further relative paths.
 		Parser(Lexer& lex, std::set<std::string>& shared_cycle_guard,
 			   const std::string& base_dir);
 
 		Lexer& lex_;
 
-		// Cycle detection for the include directive. The top-level Parser
-		// owns the actual set; sub-Parsers borrow it via a pointer so all
-		// parsers in one parse run see the same in-progress set.
+		// cycle detection for `include`. the top-level Parser owns the real
+		// set; sub-Parsers just point at it, so every parser in one run sees
+		// the same "currently open" set.
 		std::set<std::string>  owned_cycle_guard_;
 		std::set<std::string>* cycle_guard_;
 
-		// Directory that relative include paths are resolved against.
-		// Initialised from the Lexer's origin in the top-level constructor;
-		// updated to the included file's directory in sub-Parsers.
+		// what relative include paths resolve against. set from the Lexer's
+		// origin in the top-level ctor, swapped to the included file's
+		// directory in sub-Parsers.
 		std::string base_dir_;
 
-		// ---- Token-stream primitives ----------------------------------
-		// match: consume the next token if it has the requested kind, return
-		// true. Otherwise leave the stream untouched and return false.
-		// Never throws — used when a token is optional.
+		// the token-stream primitives everything else leans on.
+		// match: eat the next token if it's the right kind and return true,
+		// otherwise leave the stream alone and return false. never throws —
+		// I use it when a token is optional.
 		bool match(TokenKind kind);
 
-		// expect: require the next token to have the requested kind. On
-		// success consume and return it. On failure throw ConfigException
-		// with a message that names `context` (e.g. "after 'listen' value").
+		// expect: demand the next token be a given kind. eat and return it if
+		// so, otherwise throw ConfigException naming `context` (e.g. "after
+		// 'listen' value") so the error says where I was.
 		const Token& expect(TokenKind kind, const char* context);
 
-		// ---- Error formatting -----------------------------------------
-		// Build a "<origin>:<line>: " prefix from a token. Every error
-		// message in this module is constructed with this so the format
-		// stays uniform.
+		// builds the shared "<origin>:<line>: " error prefix from a token —
+		// everything in here uses it so the messages all look the same.
 		std::string locOf(const Token& t) const;
 
-		// ---- Grammar productions --------------------------------------
+		// the grammar productions.
 		void parseServerBlock(ServerConfig& server);
 		void parseServerDirective(ServerConfig& server);
 		void parseListen(ServerConfig& server);
@@ -74,8 +68,8 @@ class Parser {
 		void parseClientMaxBodySize(ServerConfig& server);
 		void parseErrorPage(ServerConfig& server);
 
-		// Location block: "location <path> { ... }". parseLocation reads
-		// the path, parseLocationBlock walks the inner directives.
+		// "location <path> { ... }": parseLocation grabs the path,
+		// parseLocationBlock walks the directives inside.
 		void parseLocation(ServerConfig& server);
 		void parseLocationBlock(LocationConfig& loc);
 		void parseLocationDirective(LocationConfig& loc);
@@ -88,38 +82,38 @@ class Parser {
 		void parseUploadStore(LocationConfig& loc);
 		void parseCgi(LocationConfig& loc);
 
-		// `include FILE;` inside a server block. Recursively parses the
-		// named file's server-level directives into `server`. Throws on
-		// cycles or unreadable files.
+		// `include FILE;` inside a server block — recursively parses that
+		// file's server-level directives into `server`. throws on a cycle or
+		// a file I can't read.
 		void parseInclude(ServerConfig& server);
 
-		// Recovery: skip tokens until we land on the next ';' at brace
-		// depth 0 (consumed) or '}' at depth 0 (left in place). Tracks
-		// braces so block-form unknown directives skip cleanly.
+		// my error recovery: skip ahead to the next ';' at brace depth 0 (and
+		// eat it) or a '}' at depth 0 (and leave it). counts braces so an
+		// unknown block-form directive gets skipped cleanly too.
 		void skipToEndOfDirective();
 
-		// ---- Value converters ----------------------------------------
-		// Generic helper: parse a WORD token as an integer in [lo, hi].
-		// `what` names the value for error messages ("port", "HTTP
-		// status code", ...). Throws ConfigException on any failure.
+		// the value converters.
+		// the workhorse: read a WORD as an int in [lo, hi]. `what` is just the
+		// name to put in an error ("port", "HTTP status code", ...). throws
+		// ConfigException on anything wrong.
 		long parseIntInRange(const Token& tok, long lo, long hi,
 							 const char* what);
 
-		// Convenience wrappers around parseIntInRange.
+		// thin wrappers over parseIntInRange.
 		int parsePort(const Token& tok);
 		int parseStatusCode(const Token& tok);
 
-		// Parse a size with optional K/M/G suffix (case-insensitive).
-		// "10000" -> 10000, "10K" -> 10240, "1M" -> 1048576, etc.
-		// Throws on invalid input, missing number, or overflow.
+		// parse a size with an optional case-insensitive K/M/G suffix:
+		// "10000" -> 10000, "10K" -> 10240, "1M" -> 1048576. throws on garbage,
+		// a missing number, or overflow.
 		std::size_t parseSize(const Token& tok);
 
-		// Split a "listen" argument into (host, port). Accepts "PORT",
+		// split a "listen" argument into (host, port). handles "PORT",
 		// "HOST:PORT", and "[IPv6]:PORT".
 		void splitHostPort(const Token& tok,
 						   std::string& host_out, int& port_out);
 
-		// Non-copyable: Parser holds a reference and unique progress state.
+		// non-copyable — it holds a reference and its own parse-progress state.
 		Parser(const Parser&);
 		Parser& operator=(const Parser&);
 };
