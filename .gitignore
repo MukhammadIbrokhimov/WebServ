@@ -43,3 +43,6 @@ webserv
 
 # superpowers working artifacts (specs + plans live locally only)
 docs/superpowers/
+
+# unit test binary
+tests/unit/run_tests

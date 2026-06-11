@@ -50,10 +50,24 @@ clean:
 fclean: clean
 	@echo "$(RED)🗑️  Removing executable...$(RESET)"
 	@rm -f $(TARGET)
+	@rm -f $(UNIT_BIN)
 	@echo "$(GREEN)✅ Full clean complete!$(RESET)"
 
 # Rebuild
 re: fclean all
+
+# Unit tests (phase 2.1+). Two-file build on purpose: request.cpp has no
+# deps, so tests need no sockets, no server, no main.o. Same flags as the
+# real build -- evaluators compile everything they find in the repo.
+UNIT_SRC   = tests/unit/test_request.cpp src/http/request.cpp
+UNIT_BIN   = tests/unit/run_tests
+
+unit: $(UNIT_BIN)
+	@./$(UNIT_BIN)
+
+$(UNIT_BIN): $(UNIT_SRC) $(INCLUDE_DIR)/http.hpp
+	@echo "$(CYAN)🧪 Building unit tests...$(RESET)"
+	@$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(UNIT_BIN) $(UNIT_SRC)
 
 # Show help
 help:
@@ -65,4 +79,4 @@ help:
 	@echo "  📚 make help    - Show this help message"
 
 # Phony targets (not files)
-.PHONY: all clean fclean re help
+.PHONY: all clean fclean re help unit
