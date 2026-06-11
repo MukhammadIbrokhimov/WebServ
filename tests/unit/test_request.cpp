@@ -244,6 +244,54 @@ static void test_obs_fold_rejected() {
 	check(r.hasError() && r.getErrorCode() == 400, "obs-fold line -> 400");
 }
 
+static void test_pipelining_consumed_count() {
+	Request r;
+	const std::string two = std::string(SIMPLE_GET) + "GET /next HTTP/1.1\r\n";
+	std::size_t consumed = r.parseFromBuffer(two);
+	check(consumed == std::string(SIMPLE_GET).size(),
+	      "consumption stops exactly at end of request #1");
+	check(r.isComplete(), "request #1 complete");
+	check(r.getPath() == "/", "request #1 fields untouched by trailing bytes");
+}
+
+static void test_pipelining_split_mid_request() {
+	// the worked example from the design doc: tail bytes provably arrived
+	// in the second call, so the subtraction can't underflow
+	Request r;
+	std::size_t c1 = r.parseFromBuffer("GE");
+	check(c1 == 2, "partial fragment fully counted");
+	const std::string rest = "T / HTTP/1.1\r\nHost: x\r\n\r\nGET /next";
+	std::size_t c2 = r.parseFromBuffer(rest);
+	check(c2 == rest.size() - 9, "9 tail bytes ('GET /next') excluded");
+	check(r.isComplete(), "complete after second fragment");
+}
+
+static void test_terminal_states_consume_nothing() {
+	Request done;
+	done.parseFromBuffer(SIMPLE_GET);
+	check(done.parseFromBuffer("more bytes") == 0, "complete -> consumes 0");
+	check(done.isComplete() && !done.hasError(), "state unchanged");
+
+	Request broken;
+	const std::string bad = "garbage here\r\nleftover";
+	check(broken.parseFromBuffer(bad) == bad.size(),
+	      "erroring call consumes everything (framing unrecoverable)");
+	check(broken.hasError(), "garbage errored");
+	check(broken.parseFromBuffer("more") == 0, "error -> consumes 0");
+}
+
+static void test_reset_reuse() {
+	Request r;
+	r.parseFromBuffer(SIMPLE_GET);
+	check(r.isComplete(), "first parse complete");
+	r.reset();
+	check(!r.isComplete() && !r.hasError() && r.getMethod().empty()
+	      && !r.hasHeader("host"), "reset wipes everything");
+	r.parseFromBuffer("GET /again HTTP/1.1\r\nHost: y\r\n\r\n");
+	check(r.isComplete() && r.getPath() == "/again"
+	      && r.getHeader("host") == "y", "object reusable after reset");
+}
+
 int main() {
 	test_initial_state();
 	test_request_line_happy();
@@ -266,6 +314,10 @@ int main() {
 	test_empty_and_ows_values();
 	test_empty_host_rejected();
 	test_obs_fold_rejected();
+	test_pipelining_consumed_count();
+	test_pipelining_split_mid_request();
+	test_terminal_states_consume_nothing();
+	test_reset_reuse();
 
 	std::cout << g_passed << " passed, " << g_failed << " failed"
 	          << std::endl;
