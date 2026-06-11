@@ -38,7 +38,10 @@ $(TARGET): $(OBJECTS)
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
 	@echo "$(YELLOW)🔨 Compiling $<$(RESET)"
-	@$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	@$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+# Dash prefix = silent on first build when .d files don't exist yet
+-include $(OBJECTS:.o=.d)
 
 # Clean object files
 clean:
@@ -76,6 +79,7 @@ help:
 	@echo "  🧹 make clean   - Remove object files"
 	@echo "  🗑️  make fclean  - Remove object files and executable"
 	@echo "  🔄 make re      - Clean rebuild"
+	@echo "  🧪 make unit    - Build and run unit tests"
 	@echo "  📚 make help    - Show this help message"
 
 # Phony targets (not files)
