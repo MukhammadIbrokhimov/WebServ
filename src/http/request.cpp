@@ -4,6 +4,19 @@
 // no-exceptions rationale live in http.hpp. This file grows with the
 // phases: 2.1 parses the head, 3.1 adds bodies, 5.1 adds chunked.
 
+// Hard caps. Enforced against the RAW buffer on every call -- before line
+// extraction -- so a client streaming bytes with no newline still trips
+// them. Without that an attacker sends gigabytes of 'A' and the subject's
+// no-crash-even-OOM rule takes the grade to 0. Numbers ~ nginx defaults
+// (large_client_header_buffers). 414 on the request line is nginx's
+// convention too: an over-long request line is an over-long URI in every
+// realistic case. The header caps answer 431 (RFC 6585). Bonus: these
+// caps are also what keeps the per-line front-erase in parseFromBuffer
+// cheap -- don't raise them casually.
+static const std::size_t MAX_REQUEST_LINE = 8 * 1024;
+static const std::size_t MAX_HEADER_LINE  = 8 * 1024;
+static const std::size_t MAX_HEADER_COUNT = 100;
+
 // Helper: std::tolower is locale-dependent AND undefined behaviour on
 // negative chars -- any byte >= 0x80 when char is signed, which network
 // input absolutely contains. HTTP is ASCII, so roll it by hand and skip
@@ -92,9 +105,24 @@ std::size_t Request::parseFromBuffer(const std::string& data) {
 	buf_.append(data);
 
 	while (state_ != S_COMPLETE && state_ != S_ERROR) {
+		// Cap depends on what we're in the middle of reading.
+		const std::size_t cap = (state_ == S_REQUEST_LINE)
+			? MAX_REQUEST_LINE : MAX_HEADER_LINE;
+		const int overflow_code = (state_ == S_REQUEST_LINE) ? 414 : 431;
+
 		std::size_t nl = buf_.find('\n');
-		if (nl == std::string::npos)
-			break;   // no complete line yet; keep buffering, stay incomplete
+		if (nl == std::string::npos) {
+			// No complete line. If the partial already busts the cap,
+			// fail NOW -- waiting for a newline that may never come is
+			// the unbounded-memory hole.
+			if (buf_.size() > cap)
+				setError(overflow_code);
+			break;
+		}
+		if (nl > cap) {   // line terminated, but over-long
+			setError(overflow_code);
+			break;
+		}
 
 		// Pull the line out. \r\n is canonical, but RFC 7230 3.5 says
 		// tolerate a bare \n -- this is what keeps testing with nc sane.
@@ -232,7 +260,11 @@ void Request::parseHeaderLine(const std::string& line) {
 		return;
 	}
 
-	++header_count_;   // counts lines; the cap lands in Task 5
+	++header_count_;   // counts lines; cap enforced here
+	if (header_count_ > MAX_HEADER_COUNT) {
+		setError(431);
+		return;
+	}
 
 	// Split at the FIRST colon -- values keep theirs ("Host: x:8080").
 	std::size_t colon = line.find(':');

@@ -292,6 +292,65 @@ static void test_reset_reuse() {
 	      && r.getHeader("host") == "y", "object reusable after reset");
 }
 
+static void test_request_line_limits() {
+	// Build a line of exactly 8192 bytes including the trailing \r --
+	// the boundary must PASS. (The cap counts the line before the \n.)
+	const std::size_t cap = 8 * 1024;
+	const std::string head = "GET /";
+	const std::string tail = " HTTP/1.1\r";
+	std::string line = head
+		+ std::string(cap - head.size() - tail.size(), 'a') + tail;
+	Request ok;
+	ok.parseFromBuffer(line + "\nHost: x\r\n\r\n");
+	check(ok.isComplete() && !ok.hasError(), "8 KB request line passes");
+
+	Request over;
+	over.parseFromBuffer("GET /" + std::string(cap, 'a') + " HTTP/1.1\r\n");
+	check(over.hasError() && over.getErrorCode() == 414,
+	      "over-cap request line -> 414");
+}
+
+static void test_no_newline_flood() {
+	// THE case the every-call raw check exists for: no terminator, ever.
+	// Without it, buf_ grows until OOM and the subject's no-crash rule
+	// takes the grade to 0.
+	Request r;
+	r.parseFromBuffer(std::string(5 * 1024, 'A'));
+	check(!r.hasError(), "5 KB unterminated: still under cap, waiting");
+	r.parseFromBuffer(std::string(4 * 1024, 'A'));
+	check(r.hasError() && r.getErrorCode() == 414,
+	      "9 KB with no newline at all -> 414");
+}
+
+static void test_header_line_limit() {
+	Request r;
+	r.parseFromBuffer("GET / HTTP/1.1\r\nX-Big: "
+	                  + std::string(9 * 1024, 'b') + "\r\n\r\n");
+	check(r.hasError() && r.getErrorCode() == 431, "9 KB header line -> 431");
+}
+
+static std::string numberedHeaders(int n) {
+	std::string out;
+	for (int i = 0; i < n; ++i) {
+		std::ostringstream ss;
+		ss << "X-H" << i << ": v\r\n";
+		out += ss.str();
+	}
+	return out;
+}
+
+static void test_header_count_limit() {
+	Request ok;   // Host + 99 = 100 headers -> boundary passes
+	ok.parseFromBuffer("GET / HTTP/1.1\r\nHost: x\r\n"
+	                   + numberedHeaders(99) + "\r\n");
+	check(ok.isComplete() && !ok.hasError(), "100 headers pass");
+
+	Request over; // Host + 100 = 101 -> 431
+	over.parseFromBuffer("GET / HTTP/1.1\r\nHost: x\r\n"
+	                     + numberedHeaders(100) + "\r\n");
+	check(over.hasError() && over.getErrorCode() == 431, "101 headers -> 431");
+}
+
 int main() {
 	test_initial_state();
 	test_request_line_happy();
@@ -318,6 +377,10 @@ int main() {
 	test_pipelining_split_mid_request();
 	test_terminal_states_consume_nothing();
 	test_reset_reuse();
+	test_request_line_limits();
+	test_no_newline_flood();
+	test_header_line_limit();
+	test_header_count_limit();
 
 	std::cout << g_passed << " passed, " << g_failed << " failed"
 	          << std::endl;
