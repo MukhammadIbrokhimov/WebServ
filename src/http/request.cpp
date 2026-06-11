@@ -243,17 +243,36 @@ void Request::parseHeaderLine(const std::string& line) {
 
 	std::string name = line.substr(0, colon);
 
-	// No SP/TAB anywhere in the name. The interesting case is trailing
-	// ("Host : x"): RFC 7230 3.2.4 explicitly demands 400 because two
-	// hops disagreeing on where a header name ends is a real
-	// request-smuggling vector.
+	// No SP/TAB or CTL bytes anywhere in the name. The interesting case is
+	// trailing ("Host : x"): RFC 7230 3.2.4 explicitly demands 400 because
+	// two hops disagreeing on where a header name ends is a real
+	// request-smuggling vector. The CTL check (uc < 0x20 || uc == 0x7F) is
+	// the same guard the URI got -- header names become CGI env vars in 3.3
+	// (HTTP_FOO), where a NUL truncates the env name; rejecting here is one
+	// loop, debugging it in 3.3 is an afternoon. Bytes >= 0x80 stay legal.
 	for (std::size_t i = 0; i < name.size(); ++i) {
+		unsigned char uc = static_cast<unsigned char>(name[i]);
+		if (uc < 0x20 || uc == 0x7F) { setError(400); return; }
 		if (name[i] == ' ' || name[i] == '\t') { setError(400); return; }
 	}
 
 	std::string key   = lowerCopy(name);  // normalize at the boundary,
 	                                      // compare exactly inside
 	std::string value = trimOws(line.substr(colon + 1));
+
+	// No CTL bytes in the value either, except HTAB which RFC 7230
+	// field-content allows inside a value (OWS at the edges was already
+	// trimmed above). Same CGI env-var rationale; Host's value feeds
+	// vhost matching in 2.4/2.5, so garbage there is a live routing bug.
+	for (std::size_t i = 0; i < value.size(); ++i) {
+		unsigned char uc = static_cast<unsigned char>(value[i]);
+		if ((uc < 0x20 && uc != '\t') || uc == 0x7F) { setError(400); return; }
+	}
+
+	// Empty Host is rejected -- nginx (the subject's reference) does the
+	// same, and 2.5's vhost matcher shouldn't need a fallback for an
+	// accidental zero-length host.
+	if (key == "host" && value.empty()) { setError(400); return; }
 
 	std::map<std::string, std::string>::iterator it = headers_.find(key);
 	if (it == headers_.end()) {

@@ -193,6 +193,57 @@ static void test_ctl_bytes_rejected() {
 	check(r3.hasError() && r3.getErrorCode() == 400, "bare CR in header -> 400");
 }
 
+static void test_header_ctl_bytes_rejected() {
+	// Same hardening as the URI got, same reason: header names/values
+	// become CGI env vars in 3.3, and a NUL truncates the env name there.
+	Request r1;
+	r1.parseFromBuffer(std::string("GET / HTTP/1.1\r\nX-\0Y: v\r\nHost: x\r\n\r\n", 36));
+	check(r1.hasError() && r1.getErrorCode() == 400, "NUL in header name -> 400");
+
+	Request r2;
+	r2.parseFromBuffer(std::string("GET / HTTP/1.1\r\nX-Y: a\0b\r\nHost: x\r\n\r\n", 37));
+	check(r2.hasError() && r2.getErrorCode() == 400, "NUL in header value -> 400");
+
+	Request r3;
+	r3.parseFromBuffer("GET / HTTP/1.1\r\nX-Y: a\033b\r\nHost: x\r\n\r\n");
+	check(r3.hasError() && r3.getErrorCode() == 400, "ESC in header value -> 400");
+
+	Request r4;
+	r4.parseFromBuffer("GET / HTTP/1.1\r\nHost\t: x\r\n\r\n");
+	check(r4.hasError() && r4.getErrorCode() == 400, "tab in header name -> 400");
+}
+
+static void test_empty_and_ows_values() {
+	Request r1;
+	r1.parseFromBuffer("GET / HTTP/1.1\r\nHost: x\r\nX-Empty:\r\n\r\n");
+	check(r1.isComplete() && r1.hasHeader("x-empty")
+	      && r1.getHeader("x-empty") == "", "empty value: present, empty string");
+
+	Request r2;
+	r2.parseFromBuffer("GET / HTTP/1.1\r\nHost: x\r\nX-Ows: \t \r\n\r\n");
+	check(r2.isComplete() && r2.getHeader("x-ows") == "",
+	      "all-OWS value trims to empty");
+}
+
+static void test_empty_host_rejected() {
+	// nginx (the subject's reference) 400s a zero-length Host; matching
+	// it means 2.5's vhost matcher never sees an empty host.
+	Request r;
+	r.parseFromBuffer("GET / HTTP/1.1\r\nHost:\r\n\r\n");
+	check(r.hasError() && r.getErrorCode() == 400, "empty Host value -> 400");
+}
+
+static void test_obs_fold_rejected() {
+	// Continuation lines (obs-fold) start with SP/TAB and have no colon
+	// before the colon of the folded value... in practice ours dies on
+	// the no-colon-at-position>0 path or SP-in-name path. RFC 7230 3.2.4
+	// says a server MAY reject -- we do. Pin it so a refactor can't
+	// silently start accepting folds.
+	Request r;
+	r.parseFromBuffer("GET / HTTP/1.1\r\nHost: x\r\n folded\r\n\r\n");
+	check(r.hasError() && r.getErrorCode() == 400, "obs-fold line -> 400");
+}
+
 int main() {
 	test_initial_state();
 	test_request_line_happy();
@@ -211,6 +262,10 @@ int main() {
 	test_header_errors();
 	test_bare_lf();
 	test_ctl_bytes_rejected();
+	test_header_ctl_bytes_rejected();
+	test_empty_and_ows_values();
+	test_empty_host_rejected();
+	test_obs_fold_rejected();
 
 	std::cout << g_passed << " passed, " << g_failed << " failed"
 	          << std::endl;
