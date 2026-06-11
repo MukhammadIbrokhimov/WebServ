@@ -21,6 +21,16 @@ static std::string lowerCopy(const std::string& s) {
 	return out;
 }
 
+// OWS = "optional whitespace" in the RFC 7230 grammar: SP and HTAB only.
+// Not isspace() -- that would also eat \v\f\r, which the grammar doesn't.
+static std::string trimOws(const std::string& s) {
+	std::size_t b = 0;
+	std::size_t e = s.size();
+	while (b < e && (s[b] == ' ' || s[b] == '\t')) ++b;
+	while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t')) --e;
+	return s.substr(b, e - b);
+}
+
 Request::Request()
 	: state_(S_REQUEST_LINE)
 	, buf_()
@@ -93,6 +103,15 @@ std::size_t Request::parseFromBuffer(const std::string& data) {
 		if (!line.empty() && line[line.size() - 1] == '\r')
 			line.erase(line.size() - 1);
 
+		// After stripping the terminator, a CR anywhere left in the line
+		// is a bare CR -- RFC 7230 3.5 says MUST reject (or replace; we
+		// reject). Catching it here covers request line AND headers in
+		// one place. Found by Task 2's code review.
+		if (line.find('\r') != std::string::npos) {
+			setError(400);
+			break;
+		}
+
 		if (state_ == S_REQUEST_LINE)
 			parseRequestLine(line);
 		else
@@ -155,6 +174,16 @@ void Request::parseRequestLine(const std::string& line) {
 	// form to proxies, and we aren't one.
 	if (uri.empty() || uri[0] != '/') { setError(400); return; }
 
+	// No control bytes in the URI. The nasty one is NUL: path_.c_str()
+	// eventually reaches open()/stat() in 2.3, and an embedded NUL
+	// truncates the C string there -- the %00.jpg bypass class, no
+	// percent-decoding needed. Cast to unsigned char so bytes >= 0x80
+	// (raw UTF-8) stay legal; only actual CTLs die here.
+	for (std::size_t i = 0; i < uri.size(); ++i) {
+		unsigned char uc = static_cast<unsigned char>(uri[i]);
+		if (uc < 0x20 || uc == 0x7F) { setError(400); return; }
+	}
+
 	// Version check is two-step on purpose. Grammar first: literal
 	// "HTTP/" digit "." digit, case-sensitive. Garbage like "FOO/1.1" is
 	// a malformed LINE -> 400. 505 is reserved for a well-formed version
@@ -190,4 +219,56 @@ void Request::parseRequestLine(const std::string& line) {
 	state_ = S_HEADERS;
 }
 
-void Request::parseHeaderLine(const std::string& line) { (void)line; }
+void Request::parseHeaderLine(const std::string& line) {
+	if (line.empty()) {
+		// Blank line = end of head. HTTP/1.1 made Host mandatory
+		// (RFC 7230 5.4 -- it's what enables name-based virtual hosting);
+		// 1.0 predates it, so no Host check there.
+		if (version_ == "HTTP/1.1" && headers_.count("host") == 0) {
+			setError(400);
+			return;
+		}
+		state_ = S_COMPLETE;   // 3.1 will branch to S_BODY here instead
+		return;
+	}
+
+	++header_count_;   // counts lines; the cap lands in Task 5
+
+	// Split at the FIRST colon -- values keep theirs ("Host: x:8080").
+	std::size_t colon = line.find(':');
+	if (colon == std::string::npos || colon == 0) {
+		setError(400);   // no colon at all, or empty name
+		return;
+	}
+
+	std::string name = line.substr(0, colon);
+
+	// No SP/TAB anywhere in the name. The interesting case is trailing
+	// ("Host : x"): RFC 7230 3.2.4 explicitly demands 400 because two
+	// hops disagreeing on where a header name ends is a real
+	// request-smuggling vector.
+	for (std::size_t i = 0; i < name.size(); ++i) {
+		if (name[i] == ' ' || name[i] == '\t') { setError(400); return; }
+	}
+
+	std::string key   = lowerCopy(name);  // normalize at the boundary,
+	                                      // compare exactly inside
+	std::string value = trimOws(line.substr(colon + 1));
+
+	std::map<std::string, std::string>::iterator it = headers_.find(key);
+	if (it == headers_.end()) {
+		headers_[key] = value;
+		return;
+	}
+
+	// Duplicate header. Host is special: a second Host MUST be rejected
+	// (RFC 7230 5.4) -- comma-joining "Host: a" + "Host: b" into "a, b"
+	// is exactly the smuggling trick. Everything else combines per 3.2.2.
+	// Forward note for 3.1: duplicate Content-Length gets the same
+	// treatment there ("5, 7" must fail the integer parse -> 400).
+	if (key == "host") {
+		setError(400);
+		return;
+	}
+	it->second += ", " + value;
+}

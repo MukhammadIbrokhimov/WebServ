@@ -39,6 +39,8 @@ static void test_request_line_happy() {
 	check(r.getMethod() == "GET", "method extracted");
 	check(r.getUri() == "/index.html", "uri extracted");
 	check(r.getVersion() == "HTTP/1.1", "version extracted");
+	check(r.getPath() == "/index.html", "query-less uri: path == uri");
+	check(r.getQuery() == "", "query-less uri: empty query");
 }
 
 static void test_query_split() {
@@ -92,6 +94,105 @@ static void test_incomplete_fragment() {
 	check(r.getMethod().empty(), "nothing parsed from a partial line");
 }
 
+static void test_simple_get_complete() {
+	// the kanban 2.1 DoD case, verbatim
+	Request r;
+	std::size_t consumed = r.parseFromBuffer(SIMPLE_GET);
+	check(consumed == std::string(SIMPLE_GET).size(), "whole head consumed");
+	check(r.isComplete(), "complete at the blank line");
+	check(!r.hasError(), "no error");
+	check(r.getHeader("Host") == "localhost", "Host readable");
+}
+
+static void test_header_case_insensitive() {
+	Request r;
+	r.parseFromBuffer("GET / HTTP/1.1\r\nHoSt: localhost\r\n\r\n");
+	check(r.getHeader("HOST") == "localhost", "stored HoSt, found HOST");
+	check(r.getHeader("host") == "localhost", "found host too");
+	check(r.hasHeader("hOsT"), "hasHeader case-insensitive");
+}
+
+static void test_header_value_with_colon() {
+	Request r;
+	r.parseFromBuffer("GET / HTTP/1.1\r\nHost: localhost:8080\r\n\r\n");
+	check(r.getHeader("host") == "localhost:8080",
+	      "split at FIRST colon; value keeps its own");
+}
+
+static void test_ows_trimming() {
+	Request r;
+	r.parseFromBuffer("GET / HTTP/1.1\r\nHost:\t  localhost \t\r\n\r\n");
+	check(r.getHeader("host") == "localhost", "OWS (SP/TAB) trimmed both ends");
+}
+
+static void test_duplicate_headers_join() {
+	Request r;
+	r.parseFromBuffer("GET / HTTP/1.1\r\nHost: x\r\nAccept: a\r\nAccept: b\r\n\r\n");
+	check(r.getHeader("accept") == "a, b", "duplicates comma-joined (7230 3.2.2)");
+}
+
+static void test_duplicate_host_rejected() {
+	Request r;
+	r.parseFromBuffer("GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n");
+	check(r.hasError() && r.getErrorCode() == 400,
+	      "two Hosts -> 400, never joined (smuggling vector)");
+}
+
+static void test_missing_host() {
+	Request r;
+	r.parseFromBuffer("GET / HTTP/1.1\r\n\r\n");
+	check(r.hasError() && r.getErrorCode() == 400, "1.1 without Host -> 400");
+}
+
+static void test_http10_no_host_ok() {
+	// Host didn't exist before 1.1 -- a Host-less 1.0 request is valid,
+	// and nginx (the subject's reference) accepts it.
+	Request r;
+	r.parseFromBuffer("GET / HTTP/1.0\r\n\r\n");
+	check(r.isComplete() && !r.hasError(), "1.0 without Host is fine");
+}
+
+static void test_header_errors() {
+	Request r1;
+	r1.parseFromBuffer("GET / HTTP/1.1\r\nNoColonHere\r\n\r\n");
+	check(r1.hasError() && r1.getErrorCode() == 400, "no colon -> 400");
+
+	Request r2;
+	r2.parseFromBuffer("GET / HTTP/1.1\r\n: value\r\n\r\n");
+	check(r2.hasError() && r2.getErrorCode() == 400, "empty name -> 400");
+
+	Request r3;
+	r3.parseFromBuffer("GET / HTTP/1.1\r\nHost : x\r\n\r\n");
+	check(r3.hasError() && r3.getErrorCode() == 400,
+	      "space before colon -> 400 (7230 3.2.4)");
+}
+
+static void test_bare_lf() {
+	Request r;
+	r.parseFromBuffer("GET / HTTP/1.1\nHost: x\n\n");
+	check(r.isComplete() && !r.hasError(), "bare LF tolerated (7230 3.5)");
+	check(r.getHeader("host") == "x", "headers parse with bare LF");
+}
+
+static void test_ctl_bytes_rejected() {
+	// Task 2's review caught these: a bare CR mid-line and a NUL in the
+	// URI both parsed fine. Bare CR is a MUST-reject (RFC 7230 3.5), and
+	// an embedded NUL would truncate path_.c_str() the moment 2.3 hands
+	// it to open() -- the %00.jpg bypass class without even needing
+	// percent-decoding.
+	Request r1;
+	r1.parseFromBuffer("GET /a\rb HTTP/1.1\r\n");
+	check(r1.hasError() && r1.getErrorCode() == 400, "bare CR in line -> 400");
+
+	Request r2;
+	r2.parseFromBuffer(std::string("GET /a\0b HTTP/1.1\r\nHost: x\r\n\r\n", 30));
+	check(r2.hasError() && r2.getErrorCode() == 400, "NUL in URI -> 400");
+
+	Request r3;
+	r3.parseFromBuffer("GET / HTTP/1.1\r\nHost: a\rb\r\n\r\n");
+	check(r3.hasError() && r3.getErrorCode() == 400, "bare CR in header -> 400");
+}
+
 int main() {
 	test_initial_state();
 	test_request_line_happy();
@@ -99,7 +200,17 @@ int main() {
 	test_request_line_errors();
 	test_leading_empty_lines();
 	test_incomplete_fragment();
-	(void)SIMPLE_GET; // used from Task 3 on
+	test_simple_get_complete();
+	test_header_case_insensitive();
+	test_header_value_with_colon();
+	test_ows_trimming();
+	test_duplicate_headers_join();
+	test_duplicate_host_rejected();
+	test_missing_host();
+	test_http10_no_host_ok();
+	test_header_errors();
+	test_bare_lf();
+	test_ctl_bytes_rejected();
 
 	std::cout << g_passed << " passed, " << g_failed << " failed"
 	          << std::endl;
