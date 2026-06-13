@@ -216,7 +216,7 @@
 
 ## PHASE 2: The Core - Basic GET & Static Files
 
-### [ ] 2.1: HTTP Request Parsing (GET, Headers, Body Stub)
+### [ completed ] 2.1: HTTP Request Parsing (GET, Headers, Body Stub)
 **Assignee:** Dev B  
 **Description:**  
 - Create Request class in includes/http.hpp and src/http/request.cpp
@@ -228,7 +228,7 @@
   - Validate HTTP/1.1 compliance
   - Extract query string from URI (store separately)
 - Methods:
-  - `parseFromBuffer(const std::string& buffer)` - returns bytes consumed or -1 (incomplete)
+  - `parseFromBuffer(const std::string& buffer)` - returns bytes consumed (always >= 0); completeness is a separate question answered by `isComplete()`
   - `getMethod()`, `getUri()`, `getHeader(key)`, `getBody()`
   - `isComplete()` - returns true if full request received
 

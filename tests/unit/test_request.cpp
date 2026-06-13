@@ -351,6 +351,63 @@ static void test_header_count_limit() {
 	check(over.hasError() && over.getErrorCode() == 431, "101 headers -> 431");
 }
 
+// The crown jewel: feed the same request split at EVERY possible byte
+// boundary (every 2-fragment split, then fully byte-by-byte). If any
+// split changes the outcome, the state machine has hidden coupling to
+// fragment boundaries -- exactly the bug class that only shows up on a
+// real network at evaluation time. We also assert the per-call consumed
+// counts SUM to the request length: that pins the byte contract 2.5
+// loops on, not just the final parser state.
+static void test_split_point_sweep_over(const std::string& req,
+                                        const std::string& host_value,
+                                        const std::string& label) {
+	for (std::size_t cut = 1; cut < req.size(); ++cut) {
+		Request r;
+		std::size_t c1 = r.parseFromBuffer(req.substr(0, cut));
+		std::size_t c2 = r.parseFromBuffer(req.substr(cut));
+		if (!(r.isComplete() && !r.hasError()
+		      && r.getMethod() == "GET"
+		      && r.getHeader("host") == host_value
+		      && c1 + c2 == req.size())) {
+			std::ostringstream ss;
+			ss << label << ": split at byte " << cut << " broke parsing";
+			check(false, ss.str());
+			return;   // one precise failure beats 30 identical lines
+		}
+	}
+	check(true, label + ": every 2-fragment split parses identically");
+
+	Request r;
+	std::size_t total = 0;
+	for (std::size_t i = 0; i < req.size(); ++i)
+		total += r.parseFromBuffer(std::string(1, req[i]));
+	check(r.isComplete() && !r.hasError()
+	      && r.getHeader("host") == host_value
+	      && total == req.size(),
+	      label + ": byte-by-byte feed parses identically");
+}
+
+static void test_split_point_sweep() {
+	test_split_point_sweep_over(SIMPLE_GET, "localhost", "crlf");
+	// bare-LF is a separate code path through the line splitter -- sweep
+	// it too.
+	test_split_point_sweep_over("GET / HTTP/1.1\nHost: localhost\n\n",
+	                            "localhost", "bare-lf");
+}
+
+static void test_header_no_newline_flood() {
+	// Mirror of test_no_newline_flood but for a HEADER line: a partial
+	// header with no terminator, streamed across calls, must trip the
+	// 8 KB header cap (431) rather than growing buf_ forever.
+	Request r;
+	r.parseFromBuffer("GET / HTTP/1.1\r\nX-Big: ");
+	r.parseFromBuffer(std::string(5 * 1024, 'b'));
+	check(!r.hasError(), "5 KB partial header: under cap, still waiting");
+	r.parseFromBuffer(std::string(4 * 1024, 'b'));
+	check(r.hasError() && r.getErrorCode() == 431,
+	      "9 KB header with no newline across calls -> 431");
+}
+
 int main() {
 	test_initial_state();
 	test_request_line_happy();
@@ -381,6 +438,8 @@ int main() {
 	test_no_newline_flood();
 	test_header_line_limit();
 	test_header_count_limit();
+	test_split_point_sweep();
+	test_header_no_newline_flood();
 
 	std::cout << g_passed << " passed, " << g_failed << " failed"
 	          << std::endl;
