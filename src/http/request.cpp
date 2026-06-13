@@ -95,7 +95,9 @@ void Request::setError(int code) {
 	state_ = S_ERROR;
 }
 
-// Grows in Task 2 (request line), Task 3 (headers), Task 5 (limits).
+// The driver: append the new bytes, peel off complete lines, dispatch each
+// to the right grammar production for the current state. 3.1 hangs body
+// reading off the S_COMPLETE transition; everything else stays put.
 std::size_t Request::parseFromBuffer(const std::string& data) {
 	// Terminal states eat nothing -- the caller (2.5) either re-feeds the
 	// leftovers to a fresh Request or closes the connection.
