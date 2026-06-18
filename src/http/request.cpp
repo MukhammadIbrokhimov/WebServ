@@ -1,4 +1,5 @@
 #include "../../includes/http.hpp"
+#include "../../includes/string_utils.hpp"   // asciiLower / lowerCopy
 
 // Incremental HTTP request parser -- the state machine picture and the
 // no-exceptions rationale live in http.hpp. This file grows with the
@@ -16,23 +17,6 @@
 static const std::size_t MAX_REQUEST_LINE = 8 * 1024;
 static const std::size_t MAX_HEADER_LINE  = 8 * 1024;
 static const std::size_t MAX_HEADER_COUNT = 100;
-
-// Helper: std::tolower is locale-dependent AND undefined behaviour on
-// negative chars -- any byte >= 0x80 when char is signed, which network
-// input absolutely contains. HTTP is ASCII, so roll it by hand and skip
-// <cctype> entirely.
-static char asciiLower(char c) {
-	if (c >= 'A' && c <= 'Z')
-		return static_cast<char>(c + 32);
-	return c;
-}
-
-static std::string lowerCopy(const std::string& s) {
-	std::string out(s);
-	for (std::size_t i = 0; i < out.size(); ++i)
-		out[i] = asciiLower(out[i]);
-	return out;
-}
 
 // OWS = "optional whitespace" in the RFC 7230 grammar: SP and HTAB only.
 // Not isspace() -- that would also eat \v\f\r, which the grammar doesn't.

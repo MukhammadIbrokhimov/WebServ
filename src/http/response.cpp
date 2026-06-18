@@ -7,23 +7,8 @@
 // and why-a-fresh-one-is-200 reasoning lives in http.hpp. This file just
 // turns fields into the wire format.
 
-// Same hand-rolled lowercaser as request.cpp, and for the same reason:
-// std::tolower is locale-dependent and UB on bytes >= 0x80. HTTP header
-// names are ASCII, so a five-line loop beats dragging in <cctype>. Kept
-// file-local here rather than shared -- two tiny copies isn't the >3
-// duplication the 4.7 cleanup cares about.
-static char asciiLower(char c) {
-	if (c >= 'A' && c <= 'Z')
-		return static_cast<char>(c + 32);
-	return c;
-}
-
-static std::string lowerCopy(const std::string& s) {
-	std::string out(s);
-	for (std::size_t i = 0; i < out.size(); ++i)
-		out[i] = asciiLower(out[i]);
-	return out;
-}
+// asciiLower / lowerCopy now live in string_utils.hpp -- request.cpp wanted
+// the exact same case-insensitive keys, so the two copies became one.
 
 // Turn the lowercased storage key back into the on-the-wire spelling:
 // uppercase the first letter and every letter after a '-'. Gives

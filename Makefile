@@ -75,11 +75,11 @@ unit: $(UNIT_BINS)
 	@./$(REQ_BIN)
 	@./$(RESP_BIN)
 
-$(REQ_BIN): $(REQ_SRC) $(INCLUDE_DIR)/http.hpp
+$(REQ_BIN): $(REQ_SRC) $(INCLUDE_DIR)/http.hpp $(INCLUDE_DIR)/string_utils.hpp
 	@echo "$(CYAN)🧪 Building request unit tests...$(RESET)"
 	@$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(REQ_BIN) $(REQ_SRC)
 
-$(RESP_BIN): $(RESP_SRC) $(INCLUDE_DIR)/http.hpp
+$(RESP_BIN): $(RESP_SRC) $(INCLUDE_DIR)/http.hpp $(INCLUDE_DIR)/string_utils.hpp
 	@echo "$(CYAN)🧪 Building response unit tests...$(RESET)"
 	@$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(RESP_BIN) $(RESP_SRC)
 
