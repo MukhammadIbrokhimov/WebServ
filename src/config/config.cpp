@@ -1,6 +1,5 @@
 #include "../../includes/webserv.hpp"
 #include "../../includes/parser.hpp"
-#include <fstream>
 #include <sstream>
 
 // the ctors for the config structs, and nothing else (this was the first
@@ -59,12 +58,10 @@ const std::vector<ServerConfig>& Config::servers() const {
 // ConfigException formatted "<path>:<line>: ...".
 
 static std::string readFile(const std::string& path) {
-	std::ifstream in(path.c_str());
-	if (!in)
+	std::string source;
+	if (!readFileToString(path, source))
 		throw ConfigException("cannot open config file '" + path + "'");
-	std::stringstream ss;
-	ss << in.rdbuf();
-	return ss.str();
+	return source;
 }
 
 void Config::load(const std::string& path) {

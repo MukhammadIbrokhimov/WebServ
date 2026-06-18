@@ -1,6 +1,4 @@
 #include "../includes/webserv.hpp"
-#include <fstream>
-#include <sstream>
 
 // --- DEV-ONLY diagnostic, remove before submission (Phase 4 cleanup) ------
 // if I set LEXER_DUMP=<path>, dump every token of that file to stderr and bail.
@@ -17,15 +15,13 @@ static const char* kindName(TokenKind k) {
 }
 
 static int dumpTokens(const std::string& path) {
-	std::ifstream in(path.c_str());
-	if (!in) {
+	std::string source;
+	if (!readFileToString(path, source)) {
 		std::cerr << "cannot open " << path << std::endl;
 		return 1;
 	}
-	std::stringstream ss;
-	ss << in.rdbuf();
 
-	Lexer lex(ss.str(), path);
+	Lexer lex(source, path);
 	while (true) {
 		const Token& t = lex.next();
 		std::cerr << "L" << t.line << "  " << kindName(t.kind)
