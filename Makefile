@@ -38,7 +38,10 @@ $(TARGET): $(OBJECTS)
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 	@mkdir -p $(dir $@)
 	@echo "$(YELLOW)🔨 Compiling $<$(RESET)"
-	@$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	@$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+# Dash prefix = silent on first build when .d files don't exist yet
+-include $(OBJECTS:.o=.d)
 
 # Clean object files
 clean:
@@ -50,10 +53,24 @@ clean:
 fclean: clean
 	@echo "$(RED)🗑️  Removing executable...$(RESET)"
 	@rm -f $(TARGET)
+	@rm -f $(UNIT_BIN)
 	@echo "$(GREEN)✅ Full clean complete!$(RESET)"
 
 # Rebuild
 re: fclean all
+
+# Unit tests (phase 2.1+). Two-file build on purpose: request.cpp has no
+# deps, so tests need no sockets, no server, no main.o. Same flags as the
+# real build -- evaluators compile everything they find in the repo.
+UNIT_SRC   = tests/unit/test_request.cpp src/http/request.cpp
+UNIT_BIN   = tests/unit/run_tests
+
+unit: $(UNIT_BIN)
+	@./$(UNIT_BIN)
+
+$(UNIT_BIN): $(UNIT_SRC) $(INCLUDE_DIR)/http.hpp
+	@echo "$(CYAN)🧪 Building unit tests...$(RESET)"
+	@$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(UNIT_BIN) $(UNIT_SRC)
 
 # Show help
 help:
@@ -62,7 +79,8 @@ help:
 	@echo "  🧹 make clean   - Remove object files"
 	@echo "  🗑️  make fclean  - Remove object files and executable"
 	@echo "  🔄 make re      - Clean rebuild"
+	@echo "  🧪 make unit    - Build and run unit tests"
 	@echo "  📚 make help    - Show this help message"
 
 # Phony targets (not files)
-.PHONY: all clean fclean re help
+.PHONY: all clean fclean re help unit
