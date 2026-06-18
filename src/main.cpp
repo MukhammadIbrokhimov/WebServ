@@ -3,8 +3,8 @@
 #include <sstream>
 
 // --- DEV-ONLY diagnostic, remove before submission (Phase 4 cleanup) ------
-// If the env var LEXER_DUMP=<path> is set, tokenise that file and print
-// every token to stderr, then exit. Useful while iterating on the parser.
+// if I set LEXER_DUMP=<path>, dump every token of that file to stderr and bail.
+// handy for eyeballing what the lexer actually produces while I poke at the parser.
 static const char* kindName(TokenKind k) {
 	switch (k) {
 		case TOK_WORD:   return "WORD  ";

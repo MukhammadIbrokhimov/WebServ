@@ -17,35 +17,34 @@ class Server {
 	private:
 		std::vector<struct pollfd> poll_fds;
 
-		// Phase 1.5 members --------------------------------------------------
-		// `config_` is a borrow: it lives in main()'s stack frame, longer
-		// than this Server, so the pointer is safe for our lifetime.
-		// Phase 2.4's router will read fd_to_server_ to know which server
-		// block a request lands on.
+		// Phase 1.5 members.
+		// config_ is just a borrow — the real Config lives in main()'s stack
+		// frame, which outlives this Server, so holding a bare pointer is fine.
+		// later, Phase 2.4's router reads fd_to_server_ to figure out which
+		// server block a request belongs to.
 		//
-		// INVARIANT: `Config` must NOT be mutated after `Config::load()` for
-		// the lifetime of this Server. fd_to_server_ stores raw pointers to
-		// elements of cfg.servers()'s internal vector; any push_back would
-		// reallocate that vector and invalidate every pointer in the map.
-		// Today main() loads cfg once and never touches it again — keep that.
+		// the thing I have to be careful about: Config must NOT change after
+		// Config::load(). fd_to_server_ holds raw pointers into the vector
+		// inside cfg.servers(), and a single push_back could reallocate that
+		// vector and leave every pointer in the map dangling. main() loads it
+		// once and never touches it again — that has to stay true.
 		const Config*                                config_;
 		std::vector<Socket*>                         listeners_;
 		std::map<int, const ServerConfig*>           fd_to_server_;
-		// Parallel map keyed on the same listener fds as fd_to_server_. Lets
-		// run() jump straight to the owning Socket on POLLIN instead of
-		// scanning listeners_ linearly — matters once Phase 4's stress test
-		// pushes the listener count up.
+		// second map on the same listener fds. it's so run() can grab the
+		// owning Socket straight from the fd on POLLIN instead of looping over
+		// listeners_ every time — only really matters once Phase 4's stress
+		// test throws a lot of listeners at it.
 		std::map<int, Socket*>                       fd_to_listener_;
-		// --------------------------------------------------------------------
 
 		Server(const Server&);
 		Server& operator=(const Server&);
 
 	public:
-		// Phase 1.5 ctor. Walks cfg.servers(), opens one Socket per
-		// ListenSpec, populates fd_to_server_. Partial-init failures are
-		// cleaned up inside the ctor so the caller never sees a half-built
-		// Server (ctor exceptions skip the dtor).
+		// Phase 1.5 ctor: walk cfg.servers(), open a Socket per ListenSpec,
+		// fill the maps. if it fails partway it cleans up after itself, so the
+		// caller never gets a half-built Server back (the dtor wouldn't run on
+		// a ctor throw, so it has to be done inside).
 		Server(const Config& cfg);
 
 		~Server();

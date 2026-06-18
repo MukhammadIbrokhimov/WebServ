@@ -22,7 +22,10 @@ class Logger {
 		Logger();
 };
 
-// Logging macros
+// macros instead of plain functions for two reasons: the level check happens
+// at the call site so when we're below the threshold we never even build the
+// string, and the do/while(0) wrapper makes each LOG_ behave like one
+// statement (so `if (x) LOG_INFO(...);` without braces still works).
 #define LOG_DEBUG(msg) \
 	do { \
 		if (Logger::DEBUG >= Logger::getLevel()) \

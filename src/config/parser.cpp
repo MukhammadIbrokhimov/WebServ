@@ -1,15 +1,14 @@
 #include "../../includes/webserv.hpp"
 #include "../../includes/parser.hpp"
 #include <sstream>
-#include <iostream>   // std::cerr for unknown-directive warnings
-#include <limits>     // std::numeric_limits for overflow check in parseSize
-#include <fstream>    // std::ifstream for include directive
+#include <iostream>   // std::cerr — for the unknown-directive warnings
+#include <limits>     // std::numeric_limits — the overflow check in parseSize
+#include <fstream>    // std::ifstream — reading an included file
 
-// ---------- File and path helpers for `include` --------------------------
-// Kept as static functions so they have internal linkage. These exist in
-// config.cpp too in a similar form; once Phase 4 polish lands they can be
-// merged into a shared utility. For now duplication is cheaper than the
-// header churn.
+// path helpers for the `include` directive. static so they stay local to this
+// file. there's near-identical code in config.cpp — I could pull both into a
+// shared util in Phase 4 polish, but right now copying a few lines is cheaper
+// than the header churn that would cause.
 
 static std::string readIncludedFile(const std::string& path) {
 	std::ifstream in(path.c_str());
@@ -20,29 +19,26 @@ static std::string readIncludedFile(const std::string& path) {
 	return ss.str();
 }
 
-// Return the directory portion of `path` (everything up to and including the
-// last '/'). Returns "" if there is no slash, meaning "current directory".
+// grab the directory part of `path` — everything up to and including the last
+// '/'. no slash means "" which I treat as the current directory.
 static std::string dirnameOf(const std::string& path) {
 	std::string::size_type slash = path.rfind('/');
 	if (slash == std::string::npos) return "";
 	return path.substr(0, slash + 1);
 }
 
-// Resolve a relative include path against the including file's directory.
-// Absolute paths (leading '/') pass through unchanged.
+// turn a relative include path into one relative to the including file's dir.
+// an absolute path (leading '/') is left alone.
 static std::string joinPath(const std::string& dir, const std::string& name) {
 	if (!name.empty() && name[0] == '/') return name;
 	return dir + name;
 }
 
-// ---------------------------------------------------------------------------
-// Parser implementation.
-// Read includes/parser.hpp for the architecture and grammar overview.
-// ---------------------------------------------------------------------------
+// the architecture + grammar overview lives in includes/parser.hpp.
 
-// Top-level constructor: the cycle guard and base dir are owned here. The
-// origin of the top file is seeded into the set so an include of the top
-// file itself counts as a cycle.
+// top-level ctor. this one actually owns the cycle guard and the base dir. I
+// seed the top file's own origin into the set straight away so that a file
+// trying to include itself counts as a cycle too.
 Parser::Parser(Lexer& lex)
 	: lex_(lex)
 	, owned_cycle_guard_()
@@ -52,9 +48,10 @@ Parser::Parser(Lexer& lex)
 	cycle_guard_->insert(lex.origin());
 }
 
-// Sub-Parser constructor: shares the cycle guard with the parent and
-// receives its own base_dir (the directory of the included file). The
-// owned_cycle_guard_ member is present but unused on this path.
+// sub-Parser ctor, used when I recurse into an included file. it points at the
+// parent's cycle guard (shared, so cross-file cycles are visible) and gets its
+// own base_dir, the directory of the included file. owned_cycle_guard_ exists
+// but goes unused down this path.
 Parser::Parser(Lexer& lex, std::set<std::string>& shared_cycle_guard,
 			   const std::string& base_dir)
 	: lex_(lex)
@@ -63,7 +60,7 @@ Parser::Parser(Lexer& lex, std::set<std::string>& shared_cycle_guard,
 	, base_dir_(base_dir)
 {}
 
-// ---------- Token-stream primitives ---------------------------------------
+// the little token-stream helpers everything else is built on.
 
 bool Parser::match(TokenKind kind) {
 	if (lex_.peek().kind != kind)
@@ -90,7 +87,7 @@ const Token& Parser::expect(TokenKind kind, const char* context) {
 	return lex_.next();
 }
 
-// ---------- Error formatting ----------------------------------------------
+// builds the "<file>:<line>: " prefix every error message starts with.
 
 std::string Parser::locOf(const Token& t) const {
 	std::stringstream ss;
@@ -98,37 +95,34 @@ std::string Parser::locOf(const Token& t) const {
 	return ss.str();
 }
 
-// ---------- Recovery ------------------------------------------------------
-
 void Parser::skipToEndOfDirective() {
-	// Recovery for an unknown directive. The directive can be in two shapes:
+	// how I recover after hitting an unknown directive. all I've seen so far is
+	// the name, and it could be either shape:
 	//
 	//   leaf:  name args ... ;
 	//   block: name args ... { ... }
 	//
-	// We don't know yet which one this is — we just saw the name. So we walk
-	// tokens tracking brace depth:
-	//   - At depth 0, a ';' ends a leaf directive: consume and return.
-	//   - At depth 0, a '}' belongs to the *enclosing* block, not us: leave
-	//     it in place and return.
-	//   - A '{' opens a body; we increment depth.
-	//   - At depth > 0, a '}' closes a nested body; decrement depth. When we
-	//     close back to 0 we are done with the block-form directive.
-	//   - A ';' at depth > 0 is a nested leaf inside our skipped body; just
-	//     consume it.
+	// so I walk forward tracking brace depth and let the structure tell me which:
+	//   - depth 0, ';'  -> it was a leaf, eat the ';' and I'm done.
+	//   - depth 0, '}'  -> that '}' closes the block I'm INSIDE, not this
+	//                      directive — leave it for the caller and return.
+	//   - '{'           -> a body opens, depth++.
+	//   - depth >0, '}' -> closes a nested body, depth--. back at 0 means the
+	//                      block-form directive is fully skipped.
+	//   - depth >0, ';' -> a leaf inside the body I'm skipping, just eat it.
 	//
-	// This is the standard "balanced-brace skipping" pattern. Getting it
-	// wrong gives the kind of cascade error we just hit at default.conf:13.
+	// it's the standard balanced-brace skip. get it wrong and you get exactly
+	// the cascade of bogus errors I hit at default.conf:13.
 	int depth = 0;
 	while (true) {
 		const Token& t = lex_.peek();
 		if (t.kind == TOK_EOF) return;
 
 		if (t.kind == TOK_RBRACE) {
-			if (depth == 0) return;       // not ours; leave for caller
+			if (depth == 0) return;       // not mine — belongs to the enclosing block
 			lex_.next();
 			--depth;
-			if (depth == 0) return;       // matched the body's '{'
+			if (depth == 0) return;       // just closed this directive's own body
 			continue;
 		}
 		if (t.kind == TOK_LBRACE) {
@@ -138,21 +132,21 @@ void Parser::skipToEndOfDirective() {
 		}
 		if (t.kind == TOK_SEMI) {
 			lex_.next();
-			if (depth == 0) return;       // leaf directive done
-			continue;                     // ';' inside skipped body
+			if (depth == 0) return;       // end of a leaf directive
+			continue;                     // ';' buried in the body I'm skipping
 		}
-		lex_.next();                      // any other token: just consume
+		lex_.next();                      // anything else: swallow and move on
 	}
 }
 
-// ---------- Grammar productions -------------------------------------------
+// the grammar itself — one method per production (recursive descent).
 
 void Parser::parseFile(std::vector<ServerConfig>& out) {
 	out.clear();
 	while (lex_.peek().kind != TOK_EOF) {
 		const Token& head = lex_.peek();
 		if (head.kind == TOK_WORD && head.text == "server") {
-			lex_.next();  // consume "server"
+			lex_.next();  // eat "server"
 			ServerConfig server;
 			parseServerBlock(server);
 			out.push_back(server);
@@ -185,16 +179,14 @@ void Parser::parseServerDirective(ServerConfig& server) {
 	if (name.text == "location")             { parseLocation(server);           return; }
 	if (name.text == "include")              { parseInclude(server);            return; }
 
-	// nginx-style leniency: warn and skip. The subject explicitly invites
-	// extra keys in the config (see IV.3), so an unknown directive isn't
-	// fatal — just a heads-up to the operator.
+	// be lenient like nginx: warn and skip rather than die. the subject
+	// actually says the config can have extra keys (IV.3), so an unknown
+	// directive isn't fatal, I just print a heads-up.
 	std::cerr << locOf(name)
 			  << "warning: unknown directive '" << name.text
 			  << "', ignoring" << std::endl;
 	skipToEndOfDirective();
 }
-
-// ---------- listen --------------------------------------------------------
 
 void Parser::parseListen(ServerConfig& server) {
 	const Token& value = expect(TOK_WORD, "as 'listen' argument");
@@ -205,10 +197,9 @@ void Parser::parseListen(ServerConfig& server) {
 	server.listens.push_back(spec);
 }
 
-// ---------- Pattern 1: trivial single-value directives -------------------
-// `server_name X;` and `root X;` are identical in shape: one WORD, one SEMI,
-// assign the text. Inlined twice rather than DRYed because two examples
-// don't justify a helper — and the explicitness makes each one easy to find.
+// `server_name X;` and `root X;` have the exact same shape: one WORD, one ';',
+// store the text. I wrote them out twice instead of making a helper — two
+// cases isn't enough to bother, and being explicit makes each easy to grep for.
 
 void Parser::parseServerName(ServerConfig& server) {
 	const Token& value = expect(TOK_WORD, "as 'server_name' argument");
@@ -222,10 +213,9 @@ void Parser::parseRoot(ServerConfig& server) {
 	server.root = value.text;
 }
 
-// ---------- Pattern 2: parsed-value directive ----------------------------
-// `client_max_body_size 10M;` — one WORD, but the WORD's text needs further
-// parsing (digits + optional K/M/G suffix). The parsing logic lives in
-// parseSize so it's reusable.
+// `client_max_body_size 10M;` — still one WORD, but this time the word needs
+// more work (digits plus an optional K/M/G). I keep that logic in parseSize so
+// it can be reused.
 
 void Parser::parseClientMaxBodySize(ServerConfig& server) {
 	const Token& value = expect(TOK_WORD, "as 'client_max_body_size' argument");
@@ -233,13 +223,10 @@ void Parser::parseClientMaxBodySize(ServerConfig& server) {
 	server.client_max_body_size = parseSize(value);
 }
 
-// ---------- Pattern 3: variable-arity directive --------------------------
-// `error_page CODE [CODE ...] PATH;`
-//
-// Grammar: at least one status code, then a path, terminated by ';'. The
-// idiom is "read WORDs until SEMI, then post-process the collected list."
-// This is the parser's first taste of "look at the structure of the
-// collected args to decide meaning."
+// `error_page CODE [CODE ...] PATH;` — variable number of args. one or more
+// status codes, then a path, then ';'. the trick is to just read WORDs until
+// the ';' and figure out what they mean afterwards from the list itself. first
+// directive where I do that "collect, then interpret the shape" thing.
 
 void Parser::parseErrorPage(ServerConfig& server) {
 	std::vector<Token> args;
@@ -253,37 +240,33 @@ void Parser::parseErrorPage(ServerConfig& server) {
 	expect(TOK_SEMI, "after 'error_page' values");
 
 	if (args.size() < 2) {
-		// Either zero args, or only one (no way to tell which is code vs path).
+		// zero args, or just one — with one I can't tell if it's the code or
+		// the path, so either way it's not enough.
 		const Token& where = args.empty() ? lex_.peek() : args[0];
 		throw ConfigException(locOf(where)
 			+ "'error_page' needs at least one status code and a path");
 	}
 
-	// Last arg is the path; every arg before it is a status code.
+	// the last arg is the path, everything before it is a status code.
 	const std::string& path = args.back().text;
 	for (std::size_t i = 0; i < args.size() - 1; ++i) {
 		int code = parseStatusCode(args[i]);
-		// Last-write wins if the same code appears twice. That matches
-		// nginx's behaviour and is the least-surprising rule.
+		// same code twice -> last one wins. that's what nginx does and it's the
+		// least surprising rule.
 		server.error_pages[code] = path;
 	}
 }
 
-// =========================================================================
-// Location blocks
-// =========================================================================
-//
-// Grammar:
+// location blocks.
 //   location_block      ::= "location" WORD "{" location_directive* "}"
-//   location_directive  ::= one of the supported directives, else warn+skip
+//   location_directive  ::= one of the ones I support, otherwise warn+skip
 //
-// parseLocation is called after the dispatcher has already consumed the
-// "location" keyword. It owns the path WORD, hands off to
-// parseLocationBlock for the body, and pushes the result onto
-// ServerConfig::locations.
+// by the time parseLocation runs the dispatcher already ate the "location"
+// keyword, so I just read the path WORD, let parseLocationBlock handle the
+// body, and push the finished thing onto ServerConfig::locations.
 //
-// parseLocationBlock is the structural twin of parseServerBlock — same
-// shape, different inner dispatcher.
+// parseLocationBlock is basically parseServerBlock again — same loop, just a
+// different inner dispatcher.
 
 void Parser::parseLocation(ServerConfig& server) {
 	const Token& pathTok = expect(TOK_WORD, "as 'location' path");
@@ -322,9 +305,9 @@ void Parser::parseLocationDirective(LocationConfig& loc) {
 	skipToEndOfDirective();
 }
 
-// ---------- allowed_methods (variable-arity, validated set) ---------------
-// Identical shape to error_page but without the "last is path" rule. The
-// validated set is the three methods the subject mandates (IV.1).
+// `allowed_methods` — same collect-until-';' shape as error_page, minus the
+// "last one is the path" twist. only the three methods the subject requires
+// (IV.1) are accepted; anything else is an error.
 
 void Parser::parseAllowedMethods(LocationConfig& loc) {
 	while (lex_.peek().kind != TOK_SEMI) {
@@ -340,14 +323,16 @@ void Parser::parseAllowedMethods(LocationConfig& loc) {
 		lex_.next();
 	}
 	if (loc.allowed_methods.empty()) {
-		// Point the error at the ';' — that's where a method should have been.
+		// aim the error at the ';', since that's exactly where a method
+		// should've shown up.
 		throw ConfigException(locOf(lex_.peek())
 			+ "'allowed_methods' needs at least one method");
 	}
 	expect(TOK_SEMI, "after 'allowed_methods' values");
 }
 
-// ---------- Trivial single-value: index, root override, upload_store -----
+// the trivial one-value directives again: index, the location's root override,
+// and upload_store. all the same WORD-then-';' shape.
 
 void Parser::parseIndex(LocationConfig& loc) {
 	const Token& value = expect(TOK_WORD, "as 'index' argument");
@@ -367,8 +352,8 @@ void Parser::parseUploadStore(LocationConfig& loc) {
 	loc.upload_store = value.text;
 }
 
-// ---------- Enum-style: autoindex on|off ---------------------------------
-// One WORD constrained to exactly two valid strings. Reject anything else.
+// `autoindex on|off` — one WORD, but it has to be exactly "on" or "off".
+// anything else is a config error.
 
 void Parser::parseAutoindex(LocationConfig& loc) {
 	const Token& value = expect(TOK_WORD, "as 'autoindex' argument (on|off)");
@@ -379,9 +364,9 @@ void Parser::parseAutoindex(LocationConfig& loc) {
 		+ "'autoindex' expects 'on' or 'off', got '" + value.text + "'");
 }
 
-// ---------- Structured: return CODE TARGET -------------------------------
-// The subject mandates HTTP redirection per route. We require both a status
-// code and a target — `return 200;` (no body) is not in scope.
+// `return CODE TARGET` — the per-route redirect the subject asks for. I require
+// both a code AND a target; the bare `return 200;` (no redirect, just a body)
+// form isn't in scope for this project.
 
 void Parser::parseReturn(LocationConfig& loc) {
 	const Token& codeTok   = expect(TOK_WORD, "as 'return' status code");
@@ -393,9 +378,9 @@ void Parser::parseReturn(LocationConfig& loc) {
 	loc.redirect.enabled = true;
 }
 
-// ---------- Map entry: cgi EXTENSION INTERPRETER -------------------------
-// Stored as a map { ".py" -> "/usr/bin/python3", ... }. The extension must
-// start with '.' so the request handler can match by filename suffix.
+// `cgi EXTENSION INTERPRETER` — goes into a map like { ".py" ->
+// "/usr/bin/python3" }. I force the extension to start with '.' so later the
+// request handler can just match on the filename suffix.
 
 void Parser::parseCgi(LocationConfig& loc) {
 	const Token& ext    = expect(TOK_WORD, "as 'cgi' extension (e.g. '.py')");
@@ -408,26 +393,21 @@ void Parser::parseCgi(LocationConfig& loc) {
 	loc.cgi[ext.text] = interp.text;
 }
 
-// =========================================================================
-// include
-// =========================================================================
+// `include FILE;` inside a server block: read FILE, tokenise it, and parse it
+// straight into the current ServerConfig as if I'd pasted its contents in place
+// of the include line.
 //
-// `include FILE;` at server scope: read FILE, tokenise it, then parse it
-// directly into the current ServerConfig as if its contents had appeared
-// in place of the include line.
-//
-// Implementation notes:
-//   - Path resolution: relative paths are joined with base_dir_ (the
-//     directory of the file that contains this `include` line), NOT the
-//     CWD of the process. That matches nginx behaviour and makes configs
-//     portable.
-//   - Cycle detection: we maintain a set of files currently being parsed.
-//     If an include resolves to a file already in the set, we throw. The
-//     entry is removed once the include finishes, so a file may be
-//     included multiple times in disjoint subtrees.
-//   - Scope: only server-scope include is supported. File-scope (mixing
-//     `server { ... }` blocks across files) and location-scope can be
-//     added later by introducing analogous sub.parseFile() / sub.parseLocationDirective() loops.
+// things worth remembering here:
+//   - relative paths resolve against base_dir_ (the directory of the file doing
+//     the include), NOT the process CWD. that's what nginx does and it keeps
+//     configs portable.
+//   - cycle detection: I keep a set of files currently being parsed and throw
+//     if an include lands on one that's already in it. the entry comes back out
+//     when the include finishes, so the same file can be included more than once
+//     as long as it's not nested inside itself.
+//   - only server-scope include for now. file-scope (server blocks spread
+//     across files) and location-scope could come later with similar
+//     sub.parseFile() / sub.parseLocationDirective() loops.
 
 void Parser::parseInclude(ServerConfig& server) {
 	const Token& pathTok = expect(TOK_WORD, "as 'include' argument");
@@ -444,23 +424,23 @@ void Parser::parseInclude(ServerConfig& server) {
 	Lexer       subLex(content, resolved);
 	Parser      sub(subLex, *cycle_guard_, dirnameOf(resolved));
 
-	// Drive the sub-Parser through server-level directives until the
-	// included file is exhausted. Same-class private access lets us call
-	// the dispatcher directly.
+	// run the sub-Parser over the included file's server-level directives until
+	// it hits EOF. they're the same class so I can call the private dispatcher
+	// on it directly.
 	while (subLex.peek().kind != TOK_EOF)
 		sub.parseServerDirective(server);
 
 	cycle_guard_->erase(resolved);
 }
 
-// ---------- Value converters ---------------------------------------------
+// the value converters — turning a WORD's text into a real number.
 
 long Parser::parseIntInRange(const Token& tok, long lo, long hi,
 							 const char* what)
 {
-	// Reject anything that isn't pure digits before even trying to parse.
-	// stringstream alone would accept leading whitespace ("  80") or a
-	// trailing junk after a parsed prefix; we want a strict contract.
+	// check it's pure digits before I even try to parse. a bare stringstream
+	// would happily swallow leading spaces ("  80") or junk after a number, and
+	// I want a strict yes/no here.
 	if (tok.text.empty())
 		throw ConfigException(locOf(tok)
 			+ "expected " + what + ", got empty");
@@ -492,15 +472,14 @@ int Parser::parsePort(const Token& tok) {
 }
 
 int Parser::parseStatusCode(const Token& tok) {
-	// HTTP status codes are 3-digit numbers. We accept the full 100..599
-	// range — informational, success, redirect, client error, server error.
+	// HTTP status codes are 3 digits. I take the whole 100..599 span —
+	// informational, success, redirect, client error, server error.
 	return static_cast<int>(parseIntInRange(tok, 100, 599, "HTTP status code"));
 }
 
 std::size_t Parser::parseSize(const Token& tok) {
-	// nginx accepts a trailing K/M/G suffix on size values, optionally
-	// uppercase. "10K" -> 10 * 1024, "1M" -> 1 * 1048576, etc.
-	// A bare number with no suffix means bytes.
+	// nginx lets size values end in K/M/G (either case): "10K" -> 10*1024,
+	// "1M" -> 1*1048576, and so on. no suffix just means bytes.
 	const std::string& s = tok.text;
 	if (s.empty())
 		throw ConfigException(locOf(tok) + "empty size value");
@@ -524,13 +503,14 @@ std::size_t Parser::parseSize(const Token& tok) {
 		throw ConfigException(locOf(tok)
 			+ "size has no number before suffix: '" + s + "'");
 
-	// Reuse the integer parser on just the digit prefix. We pass a synthetic
-	// token so the error line still points at the original source.
+	// reuse the int parser on just the digit part. I hand it a fake token built
+	// from the prefix but keep tok.line so any error still points at the real
+	// source line.
 	Token digitTok(TOK_WORD, s.substr(0, digits_end), tok.line);
 	long n = parseIntInRange(digitTok, 0, std::numeric_limits<long>::max(),
 							 "size");
 
-	// Overflow check: would n * multiplier exceed size_t?
+	// guard against n * multiplier overflowing size_t before I actually multiply.
 	std::size_t un = static_cast<std::size_t>(n);
 	if (multiplier > 1
 		&& un > std::numeric_limits<std::size_t>::max() / multiplier)
@@ -545,14 +525,14 @@ void Parser::splitHostPort(const Token& tok,
 {
 	const std::string& s = tok.text;
 
-	// Find the LAST ':' so we cope with bracketed IPv6 hosts like
-	// "[::1]:8080" — though our project doesn't actually serve IPv6.
+	// search for the LAST ':' so a bracketed IPv6 host like "[::1]:8080" still
+	// splits correctly — even though I don't actually serve IPv6 here.
 	std::string::size_type colon = s.rfind(':');
 	if (colon == std::string::npos) {
-		// Pure port form: "8080".
+		// just a port, "8080".
 		host_out = "0.0.0.0";
-		// Build a temporary token carrying just the digits so the error
-		// message in parsePort still points at the same source line.
+		// wrap the digits in a temp token so a parsePort error still points at
+		// the right source line.
 		Token portTok(TOK_WORD, s, tok.line);
 		port_out = parsePort(portTok);
 		return;
@@ -561,7 +541,7 @@ void Parser::splitHostPort(const Token& tok,
 	std::string host = s.substr(0, colon);
 	std::string port = s.substr(colon + 1);
 
-	// Strip the brackets of an IPv6 literal, defensively.
+	// strip the [] off an IPv6 literal, just in case one shows up.
 	if (host.size() >= 2 && host[0] == '[' && host[host.size() - 1] == ']')
 		host = host.substr(1, host.size() - 2);
 

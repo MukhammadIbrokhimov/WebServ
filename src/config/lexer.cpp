@@ -1,12 +1,7 @@
 #include "../../includes/webserv.hpp"
 
-// ---------------------------------------------------------------------------
-// Lexer implementation.
-//
-// Read the header (includes/lexer.hpp) first — it explains the design.
-// This file contains nothing surprising: it's a straight loop over the
-// source string emitting tokens into a vector.
-// ---------------------------------------------------------------------------
+// the design notes are in includes/lexer.hpp — read that first. this file is
+// the boring part: one loop over the source string spitting tokens into a vector.
 
 Token::Token()
 	: kind(TOK_EOF), text(""), line(0)
@@ -23,15 +18,15 @@ Lexer::Lexer(const std::string& source, const std::string& origin)
 }
 
 const Token& Lexer::peek() const {
-	// tokenize() always appends a TOK_EOF, so tokens_ is never empty and
-	// indexing pos_ is safe as long as pos_ <= tokens_.size() - 1, which
-	// next() enforces by sticking at EOF.
+	// tokenize() always tacks a TOK_EOF on the end, so tokens_ is never empty
+	// and indexing pos_ can't go out of bounds — next() makes sure pos_ never
+	// runs past the EOF slot.
 	return tokens_[pos_];
 }
 
 const Token& Lexer::next() {
-	// Sticky EOF: once we're on the sentinel, stay there. The parser can
-	// loop until kind == TOK_EOF without bounds-checking.
+	// once we land on the EOF sentinel, stay there. that's what lets the parser
+	// loop "until TOK_EOF" without ever bounds-checking pos_ itself.
 	if (tokens_[pos_].kind == TOK_EOF)
 		return tokens_[pos_];
 	return tokens_[pos_++];
@@ -41,16 +36,15 @@ const std::string& Lexer::origin() const {
 	return origin_;
 }
 
-// Local helpers, kept out of the header so they don't pollute the public
-// namespace. `static` at file scope means "internal linkage" — these
-// functions can't be referenced from other translation units.
+// helpers I keep in the .cpp instead of the header so they don't leak out.
+// `static` at file scope = internal linkage, i.e. invisible to other .cpp files.
 static bool isWhitespace(char c) {
 	return c == ' ' || c == '\t' || c == '\r' || c == '\n';
 }
 
 static bool isSpecial(char c) {
-	// The four characters that terminate a WORD (besides whitespace).
-	// '#' is in here because it starts a comment, which also ends a word.
+	// the chars that end a WORD on their own (whitespace aside). '#' is in here
+	// because it kicks off a comment, and a comment ends the current word too.
 	return c == '{' || c == '}' || c == ';' || c == '#';
 }
 
@@ -61,37 +55,36 @@ void Lexer::tokenize(const std::string& src) {
 	while (i < src.size()) {
 		char c = src[i];
 
-		// Newlines: count them, then move on.
+		// newline: bump the line counter and keep going.
 		if (c == '\n') {
 			++line;
 			++i;
 			continue;
 		}
 
-		// Other whitespace: just skip.
+		// any other whitespace: skip it.
 		if (isWhitespace(c)) {
 			++i;
 			continue;
 		}
 
-		// Comments: '#' to end of line. We do NOT increment `line` here —
-		// the next loop iteration will see the '\n' and bump it. Keeping
-		// the line-counter logic in one place avoids off-by-ones.
+		// comment: skip from '#' to the end of the line. on purpose I do NOT
+		// bump `line` here — I let the next iteration hit the '\n' and bump it,
+		// so all the line counting stays in one place and I avoid off-by-ones.
 		if (c == '#') {
 			while (i < src.size() && src[i] != '\n')
 				++i;
 			continue;
 		}
 
-		// Single-character punctuation tokens.
+		// the single-char punctuation tokens.
 		if (c == '{') { tokens_.push_back(Token(TOK_LBRACE, "{", line)); ++i; continue; }
 		if (c == '}') { tokens_.push_back(Token(TOK_RBRACE, "}", line)); ++i; continue; }
 		if (c == ';') { tokens_.push_back(Token(TOK_SEMI,   ";", line)); ++i; continue; }
 
-		// Otherwise: a WORD. Accumulate until we hit whitespace or a
-		// special character. By the time we get here we already know `c`
-		// itself is not whitespace and not special, so the word will have
-		// at least one character.
+		// anything else is a WORD: keep eating chars until whitespace or a
+		// special one. I already know the current `c` is neither, so the word
+		// is guaranteed to be at least one char long.
 		std::string word;
 		while (i < src.size()) {
 			char ch = src[i];
@@ -103,6 +96,6 @@ void Lexer::tokenize(const std::string& src) {
 		tokens_.push_back(Token(TOK_WORD, word, line));
 	}
 
-	// Sentinel: the parser keeps reading until it sees this.
+	// the sentinel the parser stops on.
 	tokens_.push_back(Token(TOK_EOF, "", line));
 }

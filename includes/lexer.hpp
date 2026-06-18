@@ -4,13 +4,9 @@
 #include <vector>
 #include <cstddef>   // std::size_t
 
-// ---------------------------------------------------------------------------
-// Token kinds for the config language.
-//
-// The vocabulary is intentionally minimal: five kinds cover the entire
-// nginx-style grammar we accept. Anything richer (string literals, numbers,
-// regex flags) would add new kinds here.
-// ---------------------------------------------------------------------------
+// the whole token vocabulary for my config language — just five kinds, that's
+// genuinely all the nginx-style grammar I accept needs. if I ever wanted
+// string literals or numbers as real tokens I'd add them here, but I don't.
 enum TokenKind {
 	TOK_WORD,    // any non-whitespace, non-special run of characters
 	TOK_LBRACE,  // "{"
@@ -19,13 +15,13 @@ enum TokenKind {
 	TOK_EOF      // sticky: lexer keeps returning this once the stream ends
 };
 
-// A single token emitted by the lexer.
-//   - kind: which of the five categories above.
-//   - text: the literal characters from the source. Only meaningful for
-//           TOK_WORD; the punctuation tokens carry their symbol for nicer
-//           error messages but the parser doesn't compare on it.
-//   - line: 1-based line number where the token starts. This is what turns
-//           "syntax error" into "syntax error at line 7".
+// one token out of the lexer.
+//   kind: which of the five above.
+//   text: the actual characters. only really matters for TOK_WORD — the
+//         punctuation tokens carry their symbol too but only so error messages
+//         read nicely, the parser never compares against it.
+//   line: 1-based line the token starts on. this is the bit that lets me say
+//         "syntax error at line 7" instead of just "syntax error".
 struct Token {
 	TokenKind   kind;
 	std::string text;
@@ -35,33 +31,31 @@ struct Token {
 	Token(TokenKind k, const std::string& t, int l);
 };
 
-// ---------------------------------------------------------------------------
-// Lexer: turns a std::string of source into a token stream.
+// Lexer: source string in, token stream out.
 //
-// Eager design: the constructor tokenises the entire input upfront into a
-// std::vector<Token>. The parser walks that vector via peek()/next() like a
-// cursor. Config files are tiny (kilobytes) so the memory cost is negligible
-// and the code is far simpler than a streaming state machine.
+// I went with the eager approach — the ctor chews through the whole input at
+// once into a vector<Token>, and the parser just walks that vector with
+// peek()/next() like a cursor. config files are a few KB so holding it all in
+// memory costs nothing, and it's way less fiddly than a streaming state machine.
 //
-// The lexer is "infallible" on this grammar: every byte sequence produces
-// some valid token stream. There is no such thing as a lexer error in this
-// project — semantic errors are entirely the parser's responsibility.
-// ---------------------------------------------------------------------------
+// one nice property: the lexer can't fail on this grammar. any bytes at all
+// produce some token stream. so there's no such thing as a "lexer error" here
+// — every actual error is the parser's problem, not mine.
 class Lexer {
 	public:
-		// Tokenises `source` immediately. `origin` is a label (typically a
-		// file path) used by the parser when building error messages.
+		// tokenises `source` right away. `origin` is just a label (usually the
+		// file path) that the parser stitches into its error messages.
 		Lexer(const std::string& source, const std::string& origin);
 
-		// One-token lookahead. Returns TOK_EOF after the stream ends.
-		// Never advances the cursor.
+		// look at the next token without moving the cursor. hands back TOK_EOF
+		// once we're past the end.
 		const Token& peek() const;
 
-		// Consume and return the next token. Idempotent at EOF: after the
-		// last real token, every call keeps returning the TOK_EOF sentinel.
+		// eat the next token and return it. safe to keep calling at EOF — it
+		// just keeps handing back the same TOK_EOF sentinel forever.
 		const Token& next();
 
-		// For error messages: where did this token stream come from?
+		// where did this stream come from? (for error messages.)
 		const std::string& origin() const;
 
 	private:
@@ -71,8 +65,8 @@ class Lexer {
 
 		void tokenize(const std::string& source);
 
-		// Non-copyable: like Socket, a Lexer wraps unique state and copying
-		// it makes no sense. Declared private and not implemented.
+		// non-copyable, same trick as Socket — it owns its own cursor/state and
+		// copying it is meaningless, so declare and never define.
 		Lexer(const Lexer&);
 		Lexer& operator=(const Lexer&);
 };

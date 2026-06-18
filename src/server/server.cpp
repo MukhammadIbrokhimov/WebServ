@@ -1,11 +1,13 @@
 #include "../../includes/webserv.hpp"
 
-//global signal handler for graceful shutdown
+// one global flag the signal handler can poke. volatile sig_atomic_t because
+// that's the only type the standard promises is safe to touch from inside a
+// handler — anything fancier (locks, logging, the poll loop) isn't async-safe.
 volatile sig_atomic_t g_shutdown = 0;
 
 void Server::signal_handler(int signum) {
-	(void)signum; // suppress unused parameter warning
-	g_shutdown = 1;
+	(void)signum;        // don't care which signal — SIGINT and SIGTERM both mean "stop"
+	g_shutdown = 1;      // just raise the flag; run() does the actual cleanup
 }
 
 void Server::setup_signal_handlers() {
@@ -24,18 +26,17 @@ void Server::setup_signal_handlers() {
 	}
 }
 
-// Phase 1.5 ctor. The body has three phases:
-//   1. Walk cfg.servers() and allocate one Socket per ListenSpec.
-//   2. Each allocation that succeeds is pushed into listeners_ and registered
-//      in fd_to_server_ immediately, so a later failure has a precise list of
-//      what to clean up.
-//   3. setup_signal_handlers() runs last so the invariant "handlers installed
-//      iff Server fully constructed" holds.
+// Phase 1.5 ctor. Three things happen in order:
+//   1. walk cfg.servers() and make one Socket per ListenSpec.
+//   2. the moment a Socket is built I push it into listeners_ and record it in
+//      both maps — that way if a later one throws, I have an exact list of
+//      what's already mine to clean up.
+//   3. install the signal handlers dead last, so "handlers installed" always
+//      means "Server is fully built". don't want a signal arriving mid-init.
 //
-// If any Socket ctor throws, we catch (...) and delete every Socket we
-// already own, then rethrow. This is necessary because a constructor that
-// throws does NOT trigger its own destructor — without manual cleanup we
-// leak.
+// the catch(...) deletes everything I've already made and rethrows. I have to
+// do this by hand: when a ctor throws, the object's own dtor never runs, so
+// without this the already-opened sockets just leak.
 Server::Server(const Config& cfg)
 	: poll_fds()
 	, config_(&cfg)
@@ -58,9 +59,9 @@ Server::Server(const Config& cfg)
 			}
 		}
 	} catch (...) {
-		// Partial-init cleanup: a Socket ctor or startListening() threw.
-		// listeners_ contains only the ones that fully succeeded; delete
-		// each (their dtors close their fds).
+		// something blew up mid-setup (a Socket ctor or startListening).
+		// listeners_ only holds the ones that fully made it, so deleting each
+		// is safe and their dtors close the fds for me.
 		for (std::size_t k = 0; k < listeners_.size(); ++k)
 			delete listeners_[k];
 		listeners_.clear();
@@ -74,9 +75,10 @@ Server::Server(const Config& cfg)
 	          + " listener(s)");
 }
 
-// Destructor: only runs when the ctor completed. We close any still-open
-// client fds via the existing cleanup_sockets() helper, then delete every
-// owned listener Socket (each Socket's own dtor closes its fd).
+// this only ever runs if the ctor actually finished (see the note above about
+// ctor-throw skipping the dtor). first close any client fds still hanging
+// around via cleanup_sockets(), then delete the listener Sockets — each one's
+// dtor closes its own fd, so I don't close them here directly.
 Server::~Server() {
 	cleanup_sockets();
 	for (std::size_t i = 0; i < listeners_.size(); ++i)
@@ -86,7 +88,7 @@ Server::~Server() {
 
 // main server loop
 void Server::run() {
-	// Seed poll_fds with all listening fds.
+	// prime poll_fds with the listeners; client fds get appended as they connect
 	LOG_DEBUG("<class Server -> run() : adding listening sockets to poll_fds");
 	for (std::size_t i = 0; i < listeners_.size(); ++i) {
 		struct pollfd pfd = {listeners_[i]->getFileDescriptor(),
@@ -122,9 +124,10 @@ void Server::run() {
 				if (is_listener) {
 					LOG_DEBUG("<class Server -> run() : new incoming connection on fd "
 					          + toString(fd));
-					// O(log N) jump straight to the owning Socket. The map is
-					// kept in lock-step with fd_to_server_ in the ctor, so a
-					// hit here is guaranteed whenever is_listener is true.
+					// map lookup to grab the owning Socket directly instead of
+					// scanning listeners_. I fill this map alongside
+					// fd_to_server_ in the ctor, so if is_listener is true the
+					// fd is definitely a key here.
 					int client_fd = fd_to_listener_[fd]->acceptClient();
 					if (client_fd != -1) {
 						struct pollfd pfd_client = {client_fd, POLLIN, 0};
@@ -154,17 +157,16 @@ void Server::run() {
 	LOG_INFO("<class Server> Server shutdown complete.");
 }
 
-// Phase 1 minimal read: drain whatever the kernel has and detect when the
-// peer has closed the connection. Phase 2.1 will replace this with a real
-// HTTP request parser that accumulates a per-client read buffer.
+// Phase 1 version: just read whatever's there and notice when the peer hangs
+// up. the real HTTP parser with a per-client read buffer comes in Phase 2.1.
 //
-// Return value contract used by run():
-//   true  -> connection still healthy, keep the fd in poll_fds
-//   false -> peer closed (recv == 0) or recv failed; caller must close+erase
+// what the return value means to run():
+//   true  -> still connected, leave the fd in poll_fds
+//   false -> peer closed (recv == 0) or recv failed; run() must close + erase it
 //
-// The 42 webserv subject forbids checking errno after a read/write call, so
-// we cannot distinguish EAGAIN from a real error. We trust poll() to be the
-// authoritative source of readiness and treat any -1 as terminal.
+// the subject won't let me check errno after read/write, so I genuinely can't
+// tell EAGAIN apart from a real failure. I just let poll() be the source of
+// truth for readiness and treat any -1 as "this connection is done".
 bool Server::handle_client_data_read(int client_fd) {
 	char buffer[4096];
 	ssize_t n = recv(client_fd, buffer, sizeof(buffer), 0);
@@ -175,19 +177,19 @@ bool Server::handle_client_data_read(int client_fd) {
 	}
 	LOG_DEBUG("<class Server> Read " + toString(static_cast<long>(n))
 			  + " bytes from fd " + toString(client_fd));
-	// Phase 1: data is intentionally discarded. Parsing arrives in 2.1.
+	// for now I just throw the bytes away — parsing them is 2.1's job.
 	return true;
 }
 
 void Server::handle_client_data_write(int client_fd) {
-	// Placeholder for writing data to client. Phase 2.2/2.5 will drain a
-	// per-client write buffer here.
+	// nothing to write yet. Phase 2.2/2.5 will drain a per-client write buffer
+	// from here once responses actually exist.
 	LOG_DEBUG("<class Server> Writing data to client fd: " + toString(client_fd));
 }
 
-// Closes any still-open *client* fds in poll_fds. Listener fds are NOT
-// closed here — their lifetime belongs to the owning Socket objects in the
-// listeners_ vector; closing here would double-close.
+// only closes *client* fds. the listener fds belong to the Socket objects in
+// listeners_ and get closed by their dtors — if I closed them here too that'd
+// be a double close.
 void Server::cleanup_sockets() {
 	LOG_DEBUG("<class Server -> cleanup_sockets() : closing client fds");
 	for (size_t i = 0; i < poll_fds.size(); ++i) {
