@@ -26,6 +26,49 @@ static std::string canonicalHeaderName(const std::string& lower) {
 	return out;
 }
 
+// The Request parser is paranoid about CTLs in header names/values because
+// they become CGI env vars in 3.3; the builder owes the wire the same paranoia
+// in reverse. A CR or LF that slips into a header -- or the status-line reason
+// -- is HTTP response splitting: a CGI script (3.3) or error page could inject
+// its own headers or a forged body. So I refuse to EMIT what the parser refuses
+// to ACCEPT, and at the same boundary.
+
+// Header name grammar (RFC 7230 3.2.6 token, kept strict): non-empty, no CTLs,
+// no SP/HTAB, no ':' (that's the field separator). Anything else is a name
+// that would break framing the moment it's written out.
+static bool validHeaderName(const std::string& name) {
+	if (name.empty())
+		return false;
+	for (std::size_t i = 0; i < name.size(); ++i) {
+		unsigned char uc = static_cast<unsigned char>(name[i]);
+		if (uc < 0x20 || uc == 0x7F) return false;
+		if (name[i] == ' ' || name[i] == '\t' || name[i] == ':') return false;
+	}
+	return true;
+}
+
+// Header value: no CTLs except HTAB, which RFC 7230 field-content allows inside
+// a value (same rule the request parser uses). CR and LF are CTLs, so this is
+// what actually stops the splitting.
+static bool validHeaderValue(const std::string& value) {
+	for (std::size_t i = 0; i < value.size(); ++i) {
+		unsigned char uc = static_cast<unsigned char>(value[i]);
+		if ((uc < 0x20 && uc != '\t') || uc == 0x7F) return false;
+	}
+	return true;
+}
+
+// The reason phrase lands in "HTTP/1.1 <code> <reason>\r\n", so any CTL there
+// (CR/LF above all) splits the status line. No HTAB exception -- a reason
+// phrase never needs one.
+static bool reasonHasCtl(const std::string& reason) {
+	for (std::size_t i = 0; i < reason.size(); ++i) {
+		unsigned char uc = static_cast<unsigned char>(reason[i]);
+		if (uc < 0x20 || uc == 0x7F) return true;
+	}
+	return false;
+}
+
 Response::Response()
 	: status_(200)
 	, reason_("OK")
@@ -40,10 +83,20 @@ void Response::setStatusCode(int code) {
 
 void Response::setStatusCode(int code, const std::string& reason) {
 	status_ = code;
-	reason_ = reason;
+	// A CTL-bearing reason is an injection attempt (or a buggy CGI line) --
+	// drop it back to the table phrase rather than echo attacker bytes into
+	// the status line. Falls through to "" for a code we don't name, which is
+	// still a safe (if bare) status line.
+	reason_ = reasonHasCtl(reason) ? reasonPhrase(code) : reason;
 }
 
 void Response::setHeader(const std::string& name, const std::string& value) {
+	// Refuse to store a header that can't be safely written out. setHeader is
+	// void, so the only sane failure is to drop it whole -- a half-cleaned
+	// header is worse than none. The caller's contract is "give me a real
+	// header"; nothing in this server legitimately needs a CTL in one.
+	if (!validHeaderName(name) || !validHeaderValue(value))
+		return;
 	headers_[lowerCopy(name)] = value;   // lowercased key == case-insensitive
 }
 
@@ -68,9 +121,13 @@ std::string Response::serialize() const {
 
 	// Date is auto-filled only if the caller didn't pin one (a CGI script in
 	// 3.3 may pass its own through). time(NULL) is the live clock; httpDate
-	// formats it locale-independently.
-	if (out.find("date") == out.end())
-		out["date"] = httpDate(std::time(NULL));
+	// formats it locale-independently. On the impossible out-of-range case it
+	// returns "" -- skip the header entirely then rather than emit "Date:".
+	if (out.find("date") == out.end()) {
+		std::string date = httpDate(std::time(NULL));
+		if (!date.empty())
+			out["date"] = date;
+	}
 
 	std::ostringstream os;
 	os << "HTTP/1.1 " << status_ << ' ' << reason_ << "\r\n";
@@ -98,6 +155,11 @@ std::string Response::httpDate(std::time_t t) {
 		  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
 
 	std::tm* g = std::gmtime(&t);
+	if (g == NULL)
+		return "";   // out-of-range time_t: no crash, just no Date (serialize
+		             // still emits a valid message). Can't happen for the
+		             // time(NULL) serialize() feeds it, but gmtime is allowed
+		             // to fail and the subject's no-crash rule is absolute.
 
 	std::ostringstream os;
 	os << days[g->tm_wday] << ", "

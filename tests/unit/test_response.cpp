@@ -123,6 +123,46 @@ static void test_reason_phrase_table() {
 	check(Response::reasonPhrase(799) == "", "unknown code -> empty phrase");
 }
 
+static void test_header_rejects_crlf_injection() {
+	// Response splitting: a value carrying CRLF must never reach the wire, or
+	// a CGI passthrough in 3.3 could smuggle in its own headers / fake body.
+	// The whole poisoned header is dropped, mirroring how the request parser
+	// 400s a CTL-bearing field rather than trying to clean it.
+	Response r;
+	r.setHeader("X-Test", "ok\r\nInjected: evil");
+	std::string out = r.serialize();
+	check(!contains(out, "Injected: evil"), "CRLF value can't inject a header");
+	check(!contains(out, "X-Test"), "the poisoned header is dropped whole");
+}
+
+static void test_header_rejects_bad_name() {
+	// A space, colon or CTL in the NAME breaks framing just as badly.
+	Response r;
+	r.setHeader("Bad Name", "v");        // space
+	r.setHeader("Bad:Name", "v");        // colon
+	r.setHeader("Bad\r\nName", "v");     // CRLF
+	check(!contains(r.serialize(), "Bad"), "invalid header names dropped");
+}
+
+static void test_header_allows_tab_in_value() {
+	// HTAB is legal inside a field value (RFC 7230), and the request parser
+	// keeps it -- so the builder must not over-reject and drop a valid header.
+	Response r;
+	r.setHeader("X-Tab", "a\tb");
+	check(contains(r.serialize(), "X-Tab: a\tb\r\n"), "tab preserved in value");
+}
+
+static void test_reason_phrase_strips_ctl() {
+	// CR/LF in the reason would split the status line itself. Fall back to the
+	// table phrase for the code rather than echoing attacker bytes.
+	Response r;
+	r.setStatusCode(404, "Not Found\r\nX-Evil: 1");
+	std::string out = r.serialize();
+	check(out.compare(0, 24, "HTTP/1.1 404 Not Found\r\n") == 0,
+	      "CTL reason falls back to the table phrase");
+	check(!contains(out, "X-Evil"), "no injection through the reason phrase");
+}
+
 int main() {
 	test_default_is_empty_200();
 	test_status_code_looks_up_reason();
@@ -136,6 +176,10 @@ int main() {
 	test_date_not_overwritten();
 	test_http_date_epoch();
 	test_reason_phrase_table();
+	test_header_rejects_crlf_injection();
+	test_header_rejects_bad_name();
+	test_header_allows_tab_in_value();
+	test_reason_phrase_strips_ctl();
 
 	std::cout << g_passed << " passed, " << g_failed << " failed"
 	          << std::endl;
