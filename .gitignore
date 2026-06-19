@@ -44,5 +44,5 @@ webserv
 # superpowers working artifacts (specs + plans live locally only)
 docs/superpowers/
 
-# unit test binary
-tests/unit/run_tests
+# unit test binaries (one per suite -- request, response, ...)
+tests/unit/run_*_tests

@@ -241,7 +241,7 @@
 
 ---
 
-### [ ] 2.2: HTTP Response Construction
+### [ completed ] 2.2: HTTP Response Construction
 **Assignee:** Dev B  
 **Description:**  
 - Create Response class in includes/http.hpp and src/http/response.cpp
@@ -259,11 +259,11 @@
 - Auto-set Content-Length and Date headers
 
 **DoD:**
-- [ ] Constructs valid HTTP response with status, headers, body
-- [ ] Response line correct: "HTTP/1.1 200 OK\r\n"
-- [ ] Headers properly formatted with \r\n
-- [ ] Body appended after blank line
-- [ ] serialize() produces valid HTTP response
+- [x] Constructs valid HTTP response with status, headers, body
+- [x] Response line correct: "HTTP/1.1 200 OK\r\n"
+- [x] Headers properly formatted with \r\n
+- [x] Body appended after blank line
+- [x] serialize() produces valid HTTP response
 
 ---
 

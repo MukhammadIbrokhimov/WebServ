@@ -3,20 +3,17 @@
 #include <sstream>
 #include <iostream>   // std::cerr — for the unknown-directive warnings
 #include <limits>     // std::numeric_limits — the overflow check in parseSize
-#include <fstream>    // std::ifstream — reading an included file
 
 // path helpers for the `include` directive. static so they stay local to this
-// file. there's near-identical code in config.cpp — I could pull both into a
-// shared util in Phase 4 polish, but right now copying a few lines is cheaper
-// than the header churn that would cause.
+// file. the actual file slurp is shared with config.cpp now — readFileToString
+// in utils.hpp — so all that's left here is wrapping its bool failure in the
+// "included file" flavour of ConfigException.
 
 static std::string readIncludedFile(const std::string& path) {
-	std::ifstream in(path.c_str());
-	if (!in)
+	std::string source;
+	if (!readFileToString(path, source))
 		throw ConfigException("cannot open included file '" + path + "'");
-	std::stringstream ss;
-	ss << in.rdbuf();
-	return ss.str();
+	return source;
 }
 
 // grab the directory part of `path` — everything up to and including the last

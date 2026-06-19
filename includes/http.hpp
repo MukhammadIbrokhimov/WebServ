@@ -3,6 +3,7 @@
 #include <string>
 #include <map>
 #include <cstddef>
+#include <ctime>
 
 // Request/Response live here per the phase 0.2 layout -- Response joins in
 // task 2.2.
@@ -86,4 +87,69 @@ class Request {
 		void parseRequestLine(const std::string& line);
 		void parseHeaderLine(const std::string& line);
 		void setError(int code);
+};
+
+// Response is the mirror of Request: where Request decodes a byte stream
+// into fields, Response builds fields into a byte stream. serialize() is the
+// only thing the server loop (2.5) ever needs -- it hands the bytes to the
+// write buffer.
+//
+// I keep it I/O-free for the same reason Request is: no sockets, no Logger.
+// A handler fills in the status/headers/body and serialize() turns it into
+// "HTTP/1.1 ...\r\n...\r\n\r\nbody". That also makes the unit test a
+// dependency-free two-file build, like the request tests.
+//
+// A fresh Response is already a valid empty 200 OK -- so a GET handler can
+// just setBody() and serialize() without ceremony. Content-Length and Date
+// are filled in at serialize() time so they can't drift out of sync with the
+// body; the caller never has to remember them.
+
+class Response {
+	public:
+		Response();
+
+		// Status line pieces. The one-arg form looks the reason phrase up
+		// (setStatusCode(404) -> "Not Found") because every error site in
+		// 2.3/4.5 would otherwise hand-type the same strings. The two-arg
+		// form is the escape hatch for a code we don't name, or a CGI
+		// script that dictates its own reason.
+		void setStatusCode(int code);
+		void setStatusCode(int code, const std::string& reason);
+
+		// Header names are case-insensitive (RFC 7230 3.2), so I key them
+		// lowercased like Request does and re-canonicalize on output. That
+		// means setHeader("content-type", ...) and a later
+		// setHeader("Content-Type", ...) are the SAME header -- the second
+		// overwrites, no accidental duplicate.
+		void setHeader(const std::string& name, const std::string& value);
+
+		void setBody(const std::string& body);
+
+		// Always the real body length -- serialize() trusts this over
+		// anything the caller may have set, so a wrong Content-Length can't
+		// desync the framing (a classic smuggling bug).
+		std::size_t getContentLength() const;
+
+		// The whole message as one string. const because building bytes
+		// shouldn't mutate the object; the auto Date/Content-Length are
+		// merged into a local copy of the headers, not stored back.
+		std::string serialize() const;
+
+		// RFC 1123 date ("Sun, 06 Nov 1994 08:49:37 GMT"). Static and takes
+		// the time explicitly so it's testable without freezing the clock --
+		// serialize() feeds it time(NULL). Built by hand instead of
+		// strftime("%a"/"%b") because those are locale-dependent and HTTP
+		// dates MUST be the C locale's English abbreviations.
+		static std::string httpDate(std::time_t t);
+
+		// Canonical reason phrase for the codes this server actually emits,
+		// "" for anything we don't name. Kept as a table so the status line
+		// and 4.5's error pages read from one source of truth.
+		static std::string reasonPhrase(int code);
+
+	private:
+		int         status_;
+		std::string reason_;
+		std::string body_;
+		std::map<std::string, std::string> headers_;   // keys lowercased
 };

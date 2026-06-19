@@ -53,24 +53,35 @@ clean:
 fclean: clean
 	@echo "$(RED)🗑️  Removing executable...$(RESET)"
 	@rm -f $(TARGET)
-	@rm -f $(UNIT_BIN)
+	@rm -f $(UNIT_BINS)
 	@echo "$(GREEN)✅ Full clean complete!$(RESET)"
 
 # Rebuild
 re: fclean all
 
-# Unit tests (phase 2.1+). Two-file build on purpose: request.cpp has no
-# deps, so tests need no sockets, no server, no main.o. Same flags as the
-# real build -- evaluators compile everything they find in the repo.
-UNIT_SRC   = tests/unit/test_request.cpp src/http/request.cpp
-UNIT_BIN   = tests/unit/run_tests
+# Unit tests (phase 2.1+). One small two-file build per unit on purpose:
+# request.cpp and response.cpp each have no deps, so a test needs no sockets,
+# no server, no main.o. Same flags as the real build -- evaluators compile
+# everything they find in the repo. Add a unit -> add its pair here.
+REQ_SRC    = tests/unit/test_request.cpp src/http/request.cpp
+REQ_BIN    = tests/unit/run_request_tests
 
-unit: $(UNIT_BIN)
-	@./$(UNIT_BIN)
+RESP_SRC   = tests/unit/test_response.cpp src/http/response.cpp
+RESP_BIN   = tests/unit/run_response_tests
 
-$(UNIT_BIN): $(UNIT_SRC) $(INCLUDE_DIR)/http.hpp
-	@echo "$(CYAN)🧪 Building unit tests...$(RESET)"
-	@$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(UNIT_BIN) $(UNIT_SRC)
+UNIT_BINS  = $(REQ_BIN) $(RESP_BIN)
+
+unit: $(UNIT_BINS)
+	@./$(REQ_BIN)
+	@./$(RESP_BIN)
+
+$(REQ_BIN): $(REQ_SRC) $(INCLUDE_DIR)/http.hpp $(INCLUDE_DIR)/string_utils.hpp
+	@echo "$(CYAN)🧪 Building request unit tests...$(RESET)"
+	@$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(REQ_BIN) $(REQ_SRC)
+
+$(RESP_BIN): $(RESP_SRC) $(INCLUDE_DIR)/http.hpp $(INCLUDE_DIR)/string_utils.hpp
+	@echo "$(CYAN)🧪 Building response unit tests...$(RESET)"
+	@$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(RESP_BIN) $(RESP_SRC)
 
 # Show help
 help:
