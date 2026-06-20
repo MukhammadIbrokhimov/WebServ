@@ -33,6 +33,10 @@ static bool contains(const std::string& hay, const std::string& needle) {
 
 static void writeFile(const std::string& path, const std::string& body) {
 	std::ofstream out(path.c_str());
+	if (!out) {
+		std::cerr << "writeFile: cannot open " << path << std::endl;
+		std::exit(1);
+	}
 	out << body;
 }
 
