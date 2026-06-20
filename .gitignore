@@ -46,3 +46,4 @@ docs/superpowers/
 
 # unit test binaries (one per suite -- request, response, ...)
 tests/unit/run_*_tests
+tests/unit/run_static_tests
