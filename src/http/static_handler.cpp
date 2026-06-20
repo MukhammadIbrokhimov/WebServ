@@ -23,6 +23,9 @@
 // tool but it's not on the subject's authorized list (and it follows symlinks),
 // so I do it by hand on the path string. Returns a clean path with a single
 // leading '/' per segment; "" means the root directory itself ("/").
+// Lexical normalization doesn't resolve symlinks -- a symlink inside root that
+// points outside it would be followed. That's the accepted posture (nginx does
+// the same by default), and realpath() isn't an option for the same reason.
 //
 // No percent-decoding: the request parser already rejects NUL/CTL bytes and
 // doesn't decode, so "%2e%2e" arrives as a literal filename that can't
@@ -138,6 +141,8 @@ Response StaticFileHandler::handleGet(const Request& req,
 		// exists as a regular file. No index (or none configured) is a 403 for
 		// now -- the autoindex listing is task 5.3, and this is its hook.
 		if (!loc.index.empty()) {
+			// loc.index comes from the server config, not the request -- it's
+			// operator-supplied, so I deliberately skip normalizePath here.
 			std::string idx = fsPath + "/" + loc.index;
 			struct stat ist;
 			if (::stat(idx.c_str(), &ist) == 0 && S_ISREG(ist.st_mode))
