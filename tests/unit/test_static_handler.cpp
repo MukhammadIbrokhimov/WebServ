@@ -97,8 +97,23 @@ static void test_dot_segments_ignored() {
 	LocationConfig loc;
 	Response r = StaticFileHandler::handleGet(
 		makeGet("/./index.html"), g_root, loc);
-	check(r.serialize().compare(0, 13, "HTTP/1.1 200 ") == 0,
+	std::string out = r.serialize();
+	check(out.compare(0, 13, "HTTP/1.1 200 ") == 0,
 	      "single-dot segment ignored -> 200");
+	check(contains(out, "<h1>hello</h1>"), "single-dot segment -> serves index.html");
+}
+
+static void test_bare_dotdot_is_403() {
+	LocationConfig loc;
+	Response r = StaticFileHandler::handleGet(makeGet("/.."), g_root, loc);
+	check(r.serialize().compare(0, 13, "HTTP/1.1 403 ") == 0, "/.. -> 403");
+}
+
+static void test_partial_escape_is_403() {
+	LocationConfig loc;
+	Response r = StaticFileHandler::handleGet(makeGet("/foo/../../bar"), g_root, loc);
+	check(r.serialize().compare(0, 13, "HTTP/1.1 403 ") == 0,
+	      "/foo/../../bar escapes after descent -> 403");
 }
 
 int main() {
@@ -123,6 +138,8 @@ int main() {
 	test_traversal_is_403();
 	test_dotdot_within_root_resolves();
 	test_dot_segments_ignored();
+	test_bare_dotdot_is_403();
+	test_partial_escape_is_403();
 
 	std::cout << g_passed << " passed, " << g_failed << " failed" << std::endl;
 	return g_failed == 0 ? 0 : 1;
