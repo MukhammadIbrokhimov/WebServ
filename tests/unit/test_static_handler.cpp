@@ -116,6 +116,38 @@ static void test_partial_escape_is_403() {
 	      "/foo/../../bar escapes after descent -> 403");
 }
 
+static void test_unreadable_is_403() {
+	LocationConfig loc;
+	Response r = StaticFileHandler::handleGet(makeGet("/secret.html"), g_root, loc);
+	check(r.serialize().compare(0, 13, "HTTP/1.1 403 ") == 0,
+	      "unreadable file -> 403");
+}
+
+static void test_dir_with_index_served() {
+	LocationConfig loc;
+	loc.index = "index.html";
+	// "/sub2" is a directory; its index.html should be served at 200.
+	Response r = StaticFileHandler::handleGet(makeGet("/sub2"), g_root, loc);
+	std::string out = r.serialize();
+	check(out.compare(0, 13, "HTTP/1.1 200 ") == 0, "dir + index -> 200");
+	check(contains(out, "<h1>idx</h1>"), "serves the index file body");
+}
+
+static void test_dir_without_index_is_403() {
+	LocationConfig loc;            // index left empty
+	Response r = StaticFileHandler::handleGet(makeGet("/sub2"), g_root, loc);
+	check(r.serialize().compare(0, 13, "HTTP/1.1 403 ") == 0,
+	      "dir, no index, autoindex off -> 403");
+}
+
+static void test_root_dir_index_served() {
+	LocationConfig loc;
+	loc.index = "index.html";      // g_root itself has index.html from Task 2
+	Response r = StaticFileHandler::handleGet(makeGet("/"), g_root, loc);
+	check(r.serialize().compare(0, 13, "HTTP/1.1 200 ") == 0,
+	      "root '/' with index -> 200");
+}
+
 int main() {
 	// Build the fixture tree under a unique-ish temp dir.
 	char tmpl[] = "/tmp/webserv_static_XXXXXX";
@@ -131,6 +163,11 @@ int main() {
 	::mkdir((g_root + "/sub").c_str(), 0755);
 	writeFile(g_root + "/sub/page.html", "<h1>sub</h1>");
 
+	writeFile(g_root + "/secret.html", "secret");
+	::chmod((g_root + "/secret.html").c_str(), 0000);
+	::mkdir((g_root + "/sub2").c_str(), 0755);
+	writeFile(g_root + "/sub2/index.html", "<h1>idx</h1>");
+
 	test_missing_file_is_404();
 	test_serves_html_200();
 	test_content_type_css_js();
@@ -140,6 +177,24 @@ int main() {
 	test_dot_segments_ignored();
 	test_bare_dotdot_is_403();
 	test_partial_escape_is_403();
+	test_unreadable_is_403();
+	test_dir_with_index_served();
+	test_dir_without_index_is_403();
+	test_root_dir_index_served();
+
+	// Tear down the fixture tree. Restore readability on the chmod-000 file
+	// before unlinking, otherwise unlink() may fail on some systems.
+	::chmod((g_root + "/secret.html").c_str(), 0644);
+	::unlink((g_root + "/secret.html").c_str());
+	::unlink((g_root + "/sub2/index.html").c_str());
+	::rmdir((g_root + "/sub2").c_str());
+	::unlink((g_root + "/sub/page.html").c_str());
+	::rmdir((g_root + "/sub").c_str());
+	::unlink((g_root + "/index.html").c_str());
+	::unlink((g_root + "/a.css").c_str());
+	::unlink((g_root + "/a.js").c_str());
+	::unlink((g_root + "/blob.bin").c_str());
+	::rmdir(g_root.c_str());
 
 	std::cout << g_passed << " passed, " << g_failed << " failed" << std::endl;
 	return g_failed == 0 ? 0 : 1;

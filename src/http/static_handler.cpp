@@ -114,7 +114,6 @@ static Response serveFile(const std::string& fsPath) {
 Response StaticFileHandler::handleGet(const Request& req,
                                       const std::string& root,
                                       const LocationConfig& loc) {
-	(void)loc;
 	// root has no trailing slash by convention; getPath() always starts "/".
 	std::string base = root;
 	if (!base.empty() && base[base.size() - 1] == '/')
@@ -134,8 +133,21 @@ Response StaticFileHandler::handleGet(const Request& req,
 	if (::stat(fsPath.c_str(), &st) != 0)
 		return errorResponse(404);   // vanished between access and stat
 
+	if (S_ISDIR(st.st_mode)) {
+		// A directory serves its configured index file, if there is one and it
+		// exists as a regular file. No index (or none configured) is a 403 for
+		// now -- the autoindex listing is task 5.3, and this is its hook.
+		if (!loc.index.empty()) {
+			std::string idx = fsPath + "/" + loc.index;
+			struct stat ist;
+			if (::stat(idx.c_str(), &ist) == 0 && S_ISREG(ist.st_mode))
+				return serveFile(idx);
+		}
+		return errorResponse(403);
+	}
+
 	if (S_ISREG(st.st_mode))
 		return serveFile(fsPath);
 
-	return errorResponse(403);       // dir/FIFO/etc -- Task 4 handles dirs
+	return errorResponse(403);       // FIFO/socket/device -- nothing to serve
 }
