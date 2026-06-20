@@ -74,6 +74,33 @@ static void test_unknown_ext_is_octet_stream() {
 	      "unknown extension -> octet-stream");
 }
 
+static void test_traversal_is_403() {
+	LocationConfig loc;
+	// The literal-dotdot attack the DoD names. Must never reach /etc/passwd.
+	Response r = StaticFileHandler::handleGet(
+		makeGet("/../../../../etc/passwd"), g_root, loc);
+	check(r.serialize().compare(0, 13, "HTTP/1.1 403 ") == 0,
+	      "../ escaping root -> 403");
+}
+
+static void test_dotdot_within_root_resolves() {
+	LocationConfig loc;
+	// "/sub/../index.html" stays inside root and must resolve to /index.html.
+	Response r = StaticFileHandler::handleGet(
+		makeGet("/sub/../index.html"), g_root, loc);
+	std::string out = r.serialize();
+	check(out.compare(0, 13, "HTTP/1.1 200 ") == 0, "in-root .. -> 200");
+	check(contains(out, "<h1>hello</h1>"), "resolves to /index.html");
+}
+
+static void test_dot_segments_ignored() {
+	LocationConfig loc;
+	Response r = StaticFileHandler::handleGet(
+		makeGet("/./index.html"), g_root, loc);
+	check(r.serialize().compare(0, 13, "HTTP/1.1 200 ") == 0,
+	      "single-dot segment ignored -> 200");
+}
+
 int main() {
 	// Build the fixture tree under a unique-ish temp dir.
 	char tmpl[] = "/tmp/webserv_static_XXXXXX";
@@ -86,10 +113,16 @@ int main() {
 	writeFile(g_root + "/a.js", "var x=1;");
 	writeFile(g_root + "/blob.bin", "\x00\x01\x02 raw");
 
+	::mkdir((g_root + "/sub").c_str(), 0755);
+	writeFile(g_root + "/sub/page.html", "<h1>sub</h1>");
+
 	test_missing_file_is_404();
 	test_serves_html_200();
 	test_content_type_css_js();
 	test_unknown_ext_is_octet_stream();
+	test_traversal_is_403();
+	test_dotdot_within_root_resolves();
+	test_dot_segments_ignored();
 
 	std::cout << g_passed << " passed, " << g_failed << " failed" << std::endl;
 	return g_failed == 0 ? 0 : 1;

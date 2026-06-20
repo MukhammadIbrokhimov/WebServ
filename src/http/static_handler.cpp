@@ -3,6 +3,7 @@
 #include "../../includes/utils.hpp"
 #include <sys/stat.h>
 #include <unistd.h>
+#include <vector>
 
 // Static file serving for task 2.3. The why-it-takes-a-resolved-location and
 // why-it's-a-separate-header reasoning lives in handler.hpp. This file is the
@@ -13,6 +14,43 @@
 // reading one straight off the disk is allowed. I never read errno to decide
 // 403 vs 404; access()/stat() return values carry everything I need, which
 // also dodges the "no errno after read/write" landmine entirely.
+
+// Collapse "." and ".." in the request path lexically, BEFORE touching disk.
+// This is the whole traversal defense: a ".." pops the last real segment, and
+// a ".." with nothing left to pop means the request is climbing above root --
+// the /etc/passwd attack -- so I set `escaped` and the caller turns it into a
+// 403 without ever stat()ing outside root. realpath() would be the obvious
+// tool but it's not on the subject's authorized list (and it follows symlinks),
+// so I do it by hand on the path string. Returns a clean path with a single
+// leading '/' per segment; "" means the root directory itself ("/").
+//
+// No percent-decoding: the request parser already rejects NUL/CTL bytes and
+// doesn't decode, so "%2e%2e" arrives as a literal filename that can't
+// traverse -- only real ".." segments are a threat, and those die here.
+static std::string normalizePath(const std::string& path, bool& escaped) {
+	escaped = false;
+	std::vector<std::string> stack;
+	std::size_t i = 0;
+	while (i < path.size()) {
+		while (i < path.size() && path[i] == '/') ++i;   // eat slash run
+		std::size_t start = i;
+		while (i < path.size() && path[i] != '/') ++i;    // grab a segment
+		if (i == start) break;                            // trailing slash
+		std::string seg = path.substr(start, i - start);
+		if (seg == ".") {
+			continue;
+		} else if (seg == "..") {
+			if (stack.empty()) { escaped = true; return ""; }
+			stack.pop_back();
+		} else {
+			stack.push_back(seg);
+		}
+	}
+	std::string out;
+	for (std::size_t k = 0; k < stack.size(); ++k)
+		out += "/" + stack[k];
+	return out;
+}
 
 // A small built-in error page. Custom error_page files are task 3.5; until
 // then a 404/403 still needs a body a browser can show.
@@ -81,7 +119,13 @@ Response StaticFileHandler::handleGet(const Request& req,
 	std::string base = root;
 	if (!base.empty() && base[base.size() - 1] == '/')
 		base.erase(base.size() - 1);
-	std::string fsPath = base + req.getPath();
+
+	bool escaped = false;
+	std::string rel = normalizePath(req.getPath(), escaped);
+	if (escaped)
+		return errorResponse(403);   // climbed above root -- traversal attempt
+
+	std::string fsPath = base + rel; // rel is "" (root dir) or "/seg/seg..."
 
 	if (::access(fsPath.c_str(), F_OK) != 0)
 		return errorResponse(404);   // doesn't exist -- return value, not errno
