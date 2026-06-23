@@ -267,7 +267,7 @@
 
 ---
 
-### [ ] 2.3: File I/O & Static File Serving
+### [ completed ] 2.3: File I/O & Static File Serving
 **Assignee:** Dev C  
 **Description:**  
 - Implement StaticFileHandler class in src/http/static_handler.cpp
@@ -285,13 +285,13 @@
 - Error codes: 200, 404, 403
 
 **DoD:**
-- [ ] Serves index.html from root without errors
-- [ ] Reads arbitrary .html, .css, .js files
-- [ ] Returns 404 for missing files
-- [ ] Returns 403 for permission denied
-- [ ] Content-Type header correct for file types
-- [ ] No path traversal vulnerabilities (../../../etc/passwd fails)
-- [ ] File paths respect root directory from config
+- [x] Serves index.html from root without errors
+- [x] Reads arbitrary .html, .css, .js files
+- [x] Returns 404 for missing files
+- [x] Returns 403 for permission denied
+- [x] Content-Type header correct for file types
+- [x] No path traversal vulnerabilities (../../../etc/passwd fails)
+- [x] File paths respect root directory from config
 
 ---
 
