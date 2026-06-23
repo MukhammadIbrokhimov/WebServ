@@ -69,11 +69,18 @@ REQ_BIN    = tests/unit/run_request_tests
 RESP_SRC   = tests/unit/test_response.cpp src/http/response.cpp
 RESP_BIN   = tests/unit/run_response_tests
 
-UNIT_BINS  = $(REQ_BIN) $(RESP_BIN)
+STATIC_SRC = tests/unit/test_static_handler.cpp src/http/static_handler.cpp \
+             src/http/request.cpp src/http/response.cpp src/config/config.cpp \
+             src/config/lexer.cpp src/config/parser.cpp \
+             src/logger/exceptions.cpp
+STATIC_BIN = tests/unit/run_static_tests
+
+UNIT_BINS  = $(REQ_BIN) $(RESP_BIN) $(STATIC_BIN)
 
 unit: $(UNIT_BINS)
 	@./$(REQ_BIN)
 	@./$(RESP_BIN)
+	@./$(STATIC_BIN)
 
 $(REQ_BIN): $(REQ_SRC) $(INCLUDE_DIR)/http.hpp $(INCLUDE_DIR)/string_utils.hpp
 	@echo "$(CYAN)🧪 Building request unit tests...$(RESET)"
@@ -82,6 +89,10 @@ $(REQ_BIN): $(REQ_SRC) $(INCLUDE_DIR)/http.hpp $(INCLUDE_DIR)/string_utils.hpp
 $(RESP_BIN): $(RESP_SRC) $(INCLUDE_DIR)/http.hpp $(INCLUDE_DIR)/string_utils.hpp
 	@echo "$(CYAN)🧪 Building response unit tests...$(RESET)"
 	@$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(RESP_BIN) $(RESP_SRC)
+
+$(STATIC_BIN): $(STATIC_SRC) $(INCLUDE_DIR)/handler.hpp $(INCLUDE_DIR)/http.hpp $(INCLUDE_DIR)/config.hpp
+	@echo "$(CYAN)🧪 Building static-handler unit tests...$(RESET)"
+	@$(CXX) $(CXXFLAGS) $(INCLUDES) -o $(STATIC_BIN) $(STATIC_SRC)
 
 # Show help
 help:
